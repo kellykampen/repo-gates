@@ -1,6 +1,5 @@
 /**
- * Non-gating CI dashboards (report:test-timing, report:quality-metrics),
- * adapted from warren-cec7 / warren-5b95.
+ * Non-gating CI dashboards (report:test-timing, report:quality-metrics).
  *
  * These enforce nothing — each ratchet gate already fails the build on its
  * own. They render the current state into `$GITHUB_STEP_SUMMARY` (and stdout)

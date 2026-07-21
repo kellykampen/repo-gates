@@ -5,10 +5,6 @@ Config-driven repo quality gates for **turborepo** (and any) monorepos: a quiet
 size, debt markers, coverage, and bundle size. The **engine is repo-agnostic**;
 per-repo **policy** lives in your `repo-gates.config.json`.
 
-Inspired by the byte-identical `check:all` standard in
-[jayminwest/warren](https://github.com/jayminwest/warren), adapted to Node + pnpm +
-turbo + vitest.
-
 ## Install
 
 ```bash

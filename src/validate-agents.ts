@@ -1,5 +1,5 @@
 /**
- * Agent-doc validator (check:agents), adapted from warren-9d2f.
+ * Agent-doc validator (check:agents).
  *
  * Fails when an agent doc (AGENTS.md / CLAUDE.md) drifts out of sync with the
  * repo: any package-manager script it references in a fenced bash block must

@@ -1,5 +1,5 @@
 /**
- * Bundle-size guard (ratchet), adapted from warren-5abc.
+ * Bundle-size guard (ratchet).
  *
  * For each configured target it builds the target (turbo, cached), scans
  * its dist dir, and enforces a ratchet per bucket (js/css/…):
