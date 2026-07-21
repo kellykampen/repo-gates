@@ -62,24 +62,119 @@ Every command resolves the repo root from `process.cwd()` and loads
 `repo-gates.config.json` from there (falling back to the built-in `DEFAULT_CONFIG`).
 The config is a **partial overlay** on the defaults — set only what differs.
 
-## Config surface (highlights)
+## Configuration
 
-- `runner` — how a gate is invoked (`"pnpm run"`, `"bun run"`, …).
-- `gates` — the ordered manifest; core gates are mandatory, conditional gates run only when the repo defines them.
-- `scanRoots` / `excludeDirSegments` / `sourceExtensions` — for the size + debt walkers.
-- `fileSize.threshold`, `*.budgetsPath`, `debt.trackerPatterns`, `coverage.summaryGlobs` — per-gate policy.
-- `bundleSize.targets` — `[{ name, filter, distDir, buckets }]`; each is built via `turbo run build --filter <filter>` then measured. Empty ⇒ the gate is a no-op.
-- `ciParity.{rootGate,entryGates,workflowPrefix,configPath}` — parity graph inputs.
+`repo-gates.config.json` is a **partial overlay** on the built-in defaults — set only
+what differs from your repo. JSON is parsed strictly (no `//` comments); use a
+`"$comment"` key for inline notes, as below.
 
-Full shape: the `RepoGatesConfig` type, exported from the package.
+### Example
 
-**Import boundaries (ESLint):** architectural import rules are _data_ in
-`repo-gates.config.json` under `boundaries`; the transform
-`@kellykampen/repo-gates/eslint-boundaries` turns them into
-`@typescript-eslint/no-restricted-imports` flat configs you spread into
-`eslint.config.mjs`. Each boundary is one file scope carrying pattern groups
-(per-group `allowTypeImports`). Because flat config is last-wins per rule, nest
-broader scopes earlier and narrower ones later.
+A realistic config for a pnpm + turbo monorepo (an Electron app, a web app, shared
+packages):
+
+```jsonc
+{
+  "$comment": "Anything omitted falls back to DEFAULT_CONFIG.",
+  "runner": "pnpm run",
+
+  // Each package/app's vitest coverage-summary.json — check-coverage holds each to
+  // its own floor (gates/coverage-budgets.json), seeded by `check-coverage --init`.
+  "coverage": {
+    "summaryGlobs": [
+      "apps/*/coverage/coverage-summary.json",
+      "packages/*/coverage/coverage-summary.json"
+    ]
+  },
+
+  // Build + measure bundle budgets. Each target is built via
+  // `turbo run build --filter <filter>`, then dist is measured by bucket.
+  "bundleSize": {
+    "targets": [
+      { "name": "web", "filter": "@acme/web", "distDir": "apps/web/dist",
+        "buckets": { "js": [".js"], "css": [".css"] } }
+    ]
+  },
+
+  // check-agents: keep AGENTS.md's `pnpm run <script>` + backticked paths resolving.
+  "agents": { "targets": ["AGENTS.md"] },
+
+  // report-test-timing reads these junit files (non-gating dashboard).
+  "report": { "junitGlobs": ["apps/*/test-results/junit.xml", "packages/*/test-results/junit.xml"] },
+
+  // Architectural import rules → ESLint (see "Import boundaries" below).
+  "boundaries": [
+    {
+      "name": "renderer-isolation",
+      "files": ["apps/desktop/src/renderer/**"],
+      "ignores": ["**/*.test.ts", "**/*.test.tsx"],
+      "patterns": [
+        { "forbid": ["node:*", "better-sqlite3", "**/main/**"],
+          "allowTypeImports": true,
+          "message": "Renderer is a browser context — reach main via IPC, not a value import (import type is fine)." }
+      ]
+    },
+    {
+      "name": "no-cross-app",
+      "files": ["apps/web/**"],
+      "patterns": [
+        { "forbid": ["@acme/desktop", "@acme/desktop/**"],
+          "message": "Apps must not import each other — share via packages/*." }
+      ]
+    }
+  ]
+}
+```
+
+### Reference
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `runner` | `"pnpm run"` | How a gate script is invoked (`"pnpm run"`, `"bun run"`, `"npm run"`). |
+| `gates` | 13-gate manifest | Ordered `{ name, conditional }[]`. **Core** gates (`conditional: false`: lint, format:check, typecheck, check:size, check:debt, test, check:ci-parity) must exist or the run fails; **conditional** gates (check:scripts, check:deps, check:dups, check:agents, check:bundle-size, check:coverage) run only if you define that script. Override to add/remove/reorder. |
+| `scanRoots` | `["apps","packages","scripts"]` | Roots the file-size + debt walkers scan. |
+| `excludeDirSegments` | `node_modules`, `dist`, `out`, `.turbo`, `coverage`, … | Directory names pruned from scans. |
+| `excludePathPrefixes` | `[]` | Repo-relative path prefixes excluded from scans. |
+| `sourceExtensions` | `[".ts",".tsx"]` | Extensions the size/debt guards treat as source. |
+| `fileSize.threshold` | `600` | Default per-file line ceiling (larger files are grandfathered in the budgets file). |
+| `fileSize.budgetsPath` | `gates/file-size-budgets.json` | Grandfathered per-file budgets (`check-size --init` seeds). |
+| `debt.markerTokens` | `["TODO","FIXME","HACK","XXX"]` | Tokens that must carry a tracker reference. |
+| `debt.trackerPatterns` | `ABC-123`, `#123`, URL | Regex sources for a valid tracker reference. |
+| `debt.allowlistPath` | `gates/debt-marker-allowlist.json` | Untracked-marker allowlist (`check-debt --init` seeds). |
+| `coverage.summaryGlobs` | `apps/*`, `packages/*` | Globs matching each package's `coverage-summary.json`. |
+| `coverage.budgetsPath` | `gates/coverage-budgets.json` | Per-package floors (`check-coverage --init` seeds; floors ratchet up). |
+| `bundleSize.targets` | `[]` (no-op) | `[{ name, filter, distDir, buckets }]` — built via turbo, then raw+gzip+largest-chunk ratcheted. |
+| `bundleSize.budgetsPath` | `gates/bundle-size-budgets.json` | Bundle baselines. |
+| `agents.targets` | `[]` | Agent docs (e.g. `["AGENTS.md"]`) whose `pnpm run <x>` + backticked paths must resolve. |
+| `report.junitGlobs` | `[]` | junit files for the `report-test-timing` dashboard. |
+| `report.topN` | `20` | Slowest-tests cutoff in that dashboard. |
+| `ciParity.{configPath,rootGate,entryGates,workflowPrefix}` | `gates/ci-parity-config.json`, `check:all`, `["check:all","verify"]`, `ci` | Inputs to the CI-parity reachability graph. |
+| `boundaries` | `[]` | Import-boundary rules → ESLint (below). |
+
+The full `RepoGatesConfig` type is exported from the package for editor autocompletion.
+
+### Import boundaries (ESLint)
+
+Architectural import rules are _data_ in `repo-gates.config.json` under `boundaries`;
+the transform `@kellykampen/repo-gates/eslint-boundaries` turns them into
+`@typescript-eslint/no-restricted-imports` flat configs you spread into your
+`eslint.config.mjs`:
+
+```js
+import { boundariesToEslintConfigs } from "@kellykampen/repo-gates/eslint-boundaries";
+import repoGates from "./repo-gates.config.json" with { type: "json" };
+
+export default [
+  // …your other flat configs…
+  ...boundariesToEslintConfigs(repoGates.boundaries ?? []),
+];
+```
+
+Each boundary is one file scope carrying pattern groups; per-group `allowTypeImports`
+lets a browser context still `import type` a Node-only module. Because flat config is
+**last-wins per rule**, nest broader scopes earlier and narrower ones later (e.g.
+`renderer/**` ⊂ `desktop/**`, with the renderer scope re-including the broader
+patterns). `ignores` exempts files (commonly tests, which run in Node).
 
 **Scores protocol:** any gate contributes a headline to `check-all`'s success
 `Scores:` block by printing `SCORE: <label> — <value>` on success; `check-all`
