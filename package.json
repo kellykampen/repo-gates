@@ -27,7 +27,7 @@
     "node": ">=18"
   },
   "bin": {
-    "repo-gates": "./dist/bin/repo-gates.js"
+    "repo-gates": "dist/bin/repo-gates.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
