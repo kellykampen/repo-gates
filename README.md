@@ -1,11 +1,58 @@
-# @kellykampen/repo-gates
+# repo-gates
 
-Config-driven repo quality gates for **turborepo** (and any) monorepos: a quiet
-`check-all` orchestrator, a CI-parity drift detector, and ratchet guards for file
-size, debt markers, coverage, and bundle size. The **engine is repo-agnostic**;
-per-repo **policy** lives in your `repo-gates.config.json`.
+Config-driven quality gates for **turborepo** (and any) monorepos — one quiet
+`check-all` command that runs your whole battery (lint, format, typecheck, tests)
+alongside ratchet guards for file size, tech-debt markers, coverage, and bundle
+size, plus a CI-parity drift detector. The engine is repo-agnostic; your policy
+lives in a single `repo-gates.config.json`.
 
-## Install
+## What it does
+
+`check-all` runs an ordered manifest of gates and reports them **quietly** — one
+aligned line per gate, a tally, and (on failure) the parsed failure signature
+instead of a wall of logs:
+
+```text
+✓ lint              (2.5s)
+✓ format:check      (5.9s)
+✓ typecheck         (0.5s)
+✓ check:size        (0.3s)
+✓ check:debt        (0.3s)
+✓ test              (8.1s)
+✓ check:coverage    (9.4s)
+✓ check:ci-parity   (0.3s)
+
+8/8 gates passed (24.3s)
+
+Scores:
+  coverage   lowest packages/api 81.2% lines (12 pkgs ≥ floor)
+  file-size  tightest src/app.ts 512/512 (0 to spare)
+```
+
+The gates:
+
+| Command             | What it does                                                                                                                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `check-all`         | Runs the whole manifest quietly: aligned `✓/✗ gate (N.Ns)`, a tally, and parsed failure signatures (never the full log). On success prints a compact `Scores:` block. `--bail` stops at the first failure; `CHECK_ALL_VERBOSE=1` streams everything. |
+| `check-ci-parity`   | Fails when a `pnpm run <gate>` in `.github/workflows/ci*.yml` isn't reachable from `check-all` — kills CI/local drift.                                                                                                                     |
+| `check-size`        | Per-file line ceiling; large files are grandfathered and may only shrink. `--init` seeds baselines.                                                                                                                                       |
+| `check-debt`        | `TODO/FIXME/HACK/XXX` must carry a tracker ref (`ABC-123` / `#123` / URL) or be allowlisted. `--init` seeds the allowlist.                                                                                                                 |
+| `check-agents`      | Fails if a `pnpm run <x>` or a backticked path in `AGENTS.md` no longer resolves.                                                                                                                                                         |
+| `check-coverage`    | Holds **each package** to its own floor (no repo-wide aggregate — a high package can't mask a low one); unlisted packages must meet a `default`. Floors ratchet up. `--init` seeds; `--skip-run` reuses existing summaries.                |
+| `check-bundle-size` | Builds each configured target (turbo, cached), then ratchets raw+gzip totals AND the largest single chunk per bucket. `--init` re-baselines.                                                                                              |
+| `report-test-timing` / `report-quality-metrics` | Non-gating dashboards → `$GITHUB_STEP_SUMMARY`.                                                                                                                                        |
+
+## Why
+
+- **One quiet command.** `check-all` is the single entry point — aligned pass/fail, a tally, and parsed failure signatures instead of a wall of logs. `--bail` stops early; `CHECK_ALL_VERBOSE=1` streams everything.
+- **Ratchets, not fixed limits.** File size, tech debt, coverage, and bundle size only move in the right direction. `--init` seeds each baseline from your current tree, so day one is green — no big cleanup up front.
+- **Per-package coverage floors.** Each package is held to its own floor, so a well-covered package can't mask a thin one.
+- **CI ↔ local parity.** `check-ci-parity` fails if your CI workflow drifts from the `check-all` manifest, so "green locally" means "green in CI."
+- **Config-driven & reusable.** The engine ships no repo-specific assumptions; drop it into any repo and describe policy in one JSON file.
+
+## How to use it
+
+### Install
 
 ```bash
 pnpm add -D @kellykampen/repo-gates
@@ -15,7 +62,7 @@ pnpm add -D @kellykampen/repo-gates
 Ships compiled JS + types — no build step or Node type-stripping required in your
 repo (Node ≥ 18).
 
-## Quickstart
+### Quickstart
 
 ```bash
 pnpm exec repo-gates init          # writes repo-gates.config.json + gates/
@@ -25,7 +72,7 @@ pnpm exec repo-gates check-coverage --init
 pnpm exec repo-gates check-all     # run the whole battery
 ```
 
-Then wire the commands as scripts:
+### Wire it up
 
 ```jsonc
 {
@@ -38,19 +85,6 @@ Then wire the commands as scripts:
   }
 }
 ```
-
-## What it provides
-
-| Command             | What it does                                                                                                                                                                                                                            |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `check-all`         | Runs the whole manifest quietly: aligned `✓/✗ gate (N.Ns)`, a tally, and parsed failure signatures (never the full log). On success prints a compact `Scores:` block. `--bail` stops at the first failure; `CHECK_ALL_VERBOSE=1` streams everything. |
-| `check-ci-parity`   | Fails when a `pnpm run <gate>` in `.github/workflows/ci*.yml` isn't reachable from `check-all` — kills CI/local drift.                                                                                                                     |
-| `check-size`        | Per-file line ceiling; large files are grandfathered and may only shrink. `--init` seeds baselines.                                                                                                                                       |
-| `check-debt`        | `TODO/FIXME/HACK/XXX` must carry a tracker ref (`ABC-123` / `#123` / URL) or be allowlisted. `--init` seeds the allowlist.                                                                                                                 |
-| `check-agents`      | Fails if a `pnpm run <x>` or a backticked path in `AGENTS.md` no longer resolves.                                                                                                                                                         |
-| `check-coverage`    | Holds **each package** to its own floor (no repo-wide aggregate — a high package can't mask a low one); unlisted packages must meet a `default`. Floors ratchet up. `--init` seeds; `--skip-run` reuses existing summaries.                |
-| `check-bundle-size` | Builds each configured target (turbo, cached), then ratchets raw+gzip totals AND the largest single chunk per bucket. `--init` re-baselines.                                                                                              |
-| `report-test-timing` / `report-quality-metrics` | Non-gating dashboards → `$GITHUB_STEP_SUMMARY`.                                                                                                                                        |
 
 ## How it finds your repo
 
