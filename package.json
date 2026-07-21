@@ -1,0 +1,71 @@
+{
+  "name": "@kellykampen/repo-gates",
+  "version": "0.1.0",
+  "description": "Config-driven repo quality gates for turborepo (and any) monorepos: a quiet check:all orchestrator, CI-parity drift detector, and ratchet guards (file size, debt markers, coverage, bundle size). The engine is repo-agnostic; policy lives in the consumer repo's config.",
+  "keywords": [
+    "turborepo",
+    "turbo",
+    "monorepo",
+    "ci",
+    "quality-gates",
+    "ratchet",
+    "coverage",
+    "eslint",
+    "lint",
+    "check-all"
+  ],
+  "license": "MIT",
+  "author": "Kelly Kampen",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kellykampen/repo-gates.git"
+  },
+  "homepage": "https://github.com/kellykampen/repo-gates#readme",
+  "bugs": "https://github.com/kellykampen/repo-gates/issues",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "repo-gates": "./dist/bin/repo-gates.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
+    },
+    "./eslint-boundaries": {
+      "types": "./dist/eslint-boundaries.d.ts",
+      "default": "./dist/eslint-boundaries.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  },
+  "packageManager": "pnpm@11.15.1"
+}

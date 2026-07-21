@@ -1,0 +1,190 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { DEFAULT_CONFIG, type Ctx } from "./config.ts";
+import {
+  checkPerPackage,
+  collectPerPackage,
+  coverageScore,
+  expandGlob,
+  loadBudgets,
+  pkgKey,
+  readSummaryCounts,
+  seedBudgets,
+  seedFloor,
+  type Budgets,
+  type PkgCoverage,
+} from "./coverage.ts";
+
+function writeSummary(root: string, pkgDir: string, functionsPct: number, linesPct: number): void {
+  mkdirSync(join(root, pkgDir, "coverage"), { recursive: true });
+  writeFileSync(
+    join(root, pkgDir, "coverage", "coverage-summary.json"),
+    JSON.stringify({
+      total: {
+        functions: { covered: functionsPct, total: 100 },
+        lines: { covered: linesPct, total: 100 },
+      },
+    }),
+  );
+}
+
+function ctxFor(root: string): Ctx {
+  return {
+    repoRoot: root,
+    config: {
+      ...DEFAULT_CONFIG,
+      coverage: {
+        budgetsPath: "coverage-budgets.json",
+        summaryGlobs: ["packages/*/coverage/coverage-summary.json"],
+      },
+    },
+  };
+}
+
+describe("pkgKey", () => {
+  it("derives the package dir from a summary path", () => {
+    expect(pkgKey("/repo", "/repo/apps/web/coverage/coverage-summary.json")).toBe("apps/web");
+  });
+});
+
+describe("collectPerPackage", () => {
+  it("returns one sorted row per matched summary", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-gates-cov-"));
+    writeSummary(root, "packages/b", 80, 90);
+    writeSummary(root, "packages/a", 100, 100);
+    const rows = collectPerPackage(ctxFor(root));
+    expect(rows.map((r) => r.pkg)).toEqual(["packages/a", "packages/b"]);
+    expect(rows[1]?.totals).toEqual({ functions: 80, lines: 90 });
+  });
+});
+
+describe("checkPerPackage", () => {
+  const budgets: Budgets = {
+    default: { functions: 80, lines: 80 },
+    packages: {
+      "packages/a": { functions: 95, lines: 95 },
+      "packages/b": { functions: 70, lines: 70 },
+    },
+  };
+
+  it("fails a package below its own floor and names it", () => {
+    const perPkg: PkgCoverage[] = [{ pkg: "packages/a", totals: { functions: 90, lines: 99 } }];
+    const { failures } = checkPerPackage(perPkg, budgets);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ pkg: "packages/a", metric: "functions", floor: 95 });
+  });
+
+  it("does not let a high package mask a low one (no aggregation)", () => {
+    const perPkg: PkgCoverage[] = [
+      { pkg: "packages/a", totals: { functions: 100, lines: 100 } }, // way over
+      { pkg: "packages/b", totals: { functions: 60, lines: 60 } }, // under its 70 floor
+    ];
+    const { failures } = checkPerPackage(perPkg, budgets);
+    expect(failures.map((f) => f.pkg)).toEqual(["packages/b", "packages/b"]);
+  });
+
+  it("holds a new (unlisted) package to the default and flags it", () => {
+    const perPkg: PkgCoverage[] = [{ pkg: "packages/new", totals: { functions: 75, lines: 85 } }];
+    const { failures, newPkgs } = checkPerPackage(perPkg, budgets);
+    expect(newPkgs).toEqual(["packages/new"]);
+    expect(failures).toHaveLength(1); // functions 75 < default 80; lines 85 >= 80
+    expect(failures[0]).toMatchObject({ metric: "functions", isNew: true });
+  });
+
+  it("reports a stale budget entry with no summary", () => {
+    const perPkg: PkgCoverage[] = [{ pkg: "packages/a", totals: { functions: 99, lines: 99 } }];
+    const { stale } = checkPerPackage(perPkg, budgets);
+    expect(stale).toEqual(["packages/b"]);
+  });
+});
+
+describe("coverageScore", () => {
+  it("names the lowest-lines package and the count", () => {
+    expect(
+      coverageScore([
+        { pkg: "a", totals: { functions: 90, lines: 95 } },
+        { pkg: "b", totals: { functions: 80, lines: 70 } },
+      ]),
+    ).toBe("coverage — lowest b 70.0% lines (2 pkgs ≥ floor)");
+  });
+
+  it("is undefined with no packages", () => {
+    expect(coverageScore([])).toBeUndefined();
+  });
+});
+
+describe("seedBudgets", () => {
+  it("seeds each package 0.5pt below its measured value", () => {
+    const perPkg: PkgCoverage[] = [{ pkg: "packages/a", totals: { functions: 92.7, lines: 88.2 } }];
+    const budgets = seedBudgets(perPkg, { functions: 80, lines: 80 });
+    expect(budgets.packages["packages/a"]).toEqual({ functions: 92.2, lines: 87.7 });
+    expect(budgets.default).toEqual({ functions: 80, lines: 80 });
+  });
+});
+
+describe("seedFloor", () => {
+  it("sits 0.5pt below the measured value, floored to 2dp", () => {
+    expect(seedFloor(92.735)).toBe(92.23);
+    expect(seedFloor(0.2)).toBe(0);
+  });
+});
+
+describe("loadBudgets", () => {
+  it("parses default + packages", () => {
+    const b = loadBudgets(
+      JSON.stringify({
+        default: { functions: 80, lines: 80 },
+        packages: { "apps/web": { functions: 66, lines: 69 } },
+      }),
+    );
+    expect(b.default.lines).toBe(80);
+    expect(b.packages["apps/web"]).toEqual({ functions: 66, lines: 69 });
+  });
+
+  it("falls back to the 80/80 default when omitted", () => {
+    expect(loadBudgets(JSON.stringify({ packages: {} })).default).toEqual({
+      functions: 80,
+      lines: 80,
+    });
+  });
+
+  it("rejects an out-of-range percentage", () => {
+    expect(() =>
+      loadBudgets(JSON.stringify({ packages: { x: { functions: 120, lines: 90 } } })),
+    ).toThrow();
+  });
+});
+
+describe("readSummaryCounts", () => {
+  it("reads the total block of a vitest json-summary", () => {
+    const dir = mkdtempSync(join(tmpdir(), "repo-gates-cov-"));
+    const p = join(dir, "coverage-summary.json");
+    writeFileSync(
+      p,
+      JSON.stringify({
+        total: {
+          functions: { covered: 8, total: 10, pct: 80 },
+          lines: { covered: 90, total: 100, pct: 90 },
+        },
+      }),
+    );
+    expect(readSummaryCounts(p)).toEqual({
+      functions: { covered: 8, total: 10 },
+      lines: { covered: 90, total: 100 },
+    });
+  });
+});
+
+describe("expandGlob", () => {
+  it("expands a single-star segment", () => {
+    const root = mkdtempSync(join(tmpdir(), "repo-gates-glob-"));
+    for (const pkg of ["a", "b"]) {
+      mkdirSync(join(root, "packages", pkg, "coverage"), { recursive: true });
+      writeFileSync(join(root, "packages", pkg, "coverage", "coverage-summary.json"), "{}");
+    }
+    const matches = expandGlob(root, "packages/*/coverage/coverage-summary.json");
+    expect(matches).toHaveLength(2);
+  });
+});
