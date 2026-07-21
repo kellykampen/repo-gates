@@ -105,21 +105,26 @@ packages):
   // Architectural import rules → ESLint (see "Import boundaries" below).
   "boundaries": [
     {
-      "name": "renderer-isolation",
+      // ONE cross-app rule for every app (message written once). Safe as long as
+      // apps don't import their own package by name.
+      "name": "no-cross-app",
+      "files": ["apps/**"],
+      "patterns": [
+        { "forbid": ["@acme/web", "@acme/web/**", "@acme/desktop", "@acme/desktop/**"],
+          "message": "Apps must not import each other — share via packages/*." }
+      ]
+    },
+    {
+      // Nested scope: inherits no-cross-app's patterns via `extends` (no copy-paste),
+      // and adds its own.
+      "name": "desktop-renderer",
       "files": ["apps/desktop/src/renderer/**"],
       "ignores": ["**/*.test.ts", "**/*.test.tsx"],
+      "extends": ["no-cross-app"],
       "patterns": [
         { "forbid": ["node:*", "better-sqlite3", "**/main/**"],
           "allowTypeImports": true,
           "message": "Renderer is a browser context — reach main via IPC, not a value import (import type is fine)." }
-      ]
-    },
-    {
-      "name": "no-cross-app",
-      "files": ["apps/web/**"],
-      "patterns": [
-        { "forbid": ["@acme/desktop", "@acme/desktop/**"],
-          "message": "Apps must not import each other — share via packages/*." }
       ]
     }
   ]
@@ -171,10 +176,15 @@ export default [
 ```
 
 Each boundary is one file scope carrying pattern groups; per-group `allowTypeImports`
-lets a browser context still `import type` a Node-only module. Because flat config is
-**last-wins per rule**, nest broader scopes earlier and narrower ones later (e.g.
-`renderer/**` ⊂ `desktop/**`, with the renderer scope re-including the broader
-patterns). `ignores` exempts files (commonly tests, which run in Node).
+lets a browser context still `import type` a Node-only module. `ignores` exempts files
+(commonly tests, which run in Node).
+
+Because ESLint flat config is **last-wins per rule**, a file matched by several
+boundaries only keeps the *last* one's patterns — so a nested scope (`renderer/**` ⊂
+`apps/**`) must carry the broader patterns too. Instead of copy-pasting them, use
+**`extends`**: `{ "name": "desktop-renderer", "extends": ["no-cross-app"], … }` merges
+the named boundaries' patterns in ahead of its own (resolved transitively, cycles
+rejected). Author each rule — and its message — **once**, at its natural scope.
 
 **Scores protocol:** any gate contributes a headline to `check-all`'s success
 `Scores:` block by printing `SCORE: <label> — <value>` on success; `check-all`

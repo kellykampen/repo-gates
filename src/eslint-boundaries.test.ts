@@ -45,4 +45,50 @@ describe("boundariesToEslintConfigs", () => {
     ]);
     expect(cfgs.map((c) => c.name)).toEqual(["repo-gates/boundary/a", "repo-gates/boundary/b"]);
   });
+
+  it("merges an extended boundary's patterns ahead of its own (inherited scope keeps its own files)", () => {
+    const cfgs = boundariesToEslintConfigs([
+      { name: "no-cross-app", files: ["apps/**"], patterns: [{ forbid: ["@x/web"], message: "no cross-app" }] },
+      {
+        name: "renderer",
+        files: ["apps/desktop/src/renderer/**"],
+        extends: ["no-cross-app"],
+        patterns: [{ forbid: ["node:*"], allowTypeImports: true, message: "no node" }],
+      },
+    ]);
+    const renderer = cfgs.find((c) => c.name === "repo-gates/boundary/renderer");
+    expect(renderer?.files).toEqual(["apps/desktop/src/renderer/**"]); // own scope, not the parent's
+    const rule = renderer?.rules["@typescript-eslint/no-restricted-imports"] as [
+      string,
+      { patterns: { group: string[]; message: string }[] },
+    ];
+    // inherited group first, then own
+    expect(rule[1].patterns.map((p) => p.group)).toEqual([["@x/web"], ["node:*"]]);
+    expect(rule[1].patterns.map((p) => p.message)).toEqual(["no cross-app", "no node"]);
+  });
+
+  it("resolves extends transitively", () => {
+    const [, , c] = boundariesToEslintConfigs([
+      { name: "a", files: ["a/**"], patterns: [{ forbid: ["x"] }] },
+      { name: "b", files: ["b/**"], extends: ["a"], patterns: [{ forbid: ["y"] }] },
+      { name: "c", files: ["c/**"], extends: ["b"], patterns: [{ forbid: ["z"] }] },
+    ]);
+    const rule = c?.rules["@typescript-eslint/no-restricted-imports"] as [string, { patterns: { group: string[] }[] }];
+    expect(rule[1].patterns.map((p) => p.group)).toEqual([["x"], ["y"], ["z"]]);
+  });
+
+  it("throws on an unknown extends reference", () => {
+    expect(() =>
+      boundariesToEslintConfigs([{ name: "b", files: ["b/**"], extends: ["nope"], patterns: [] }]),
+    ).toThrow(/extends unknown boundary "nope"/);
+  });
+
+  it("throws on a circular extends", () => {
+    expect(() =>
+      boundariesToEslintConfigs([
+        { name: "a", files: ["a/**"], extends: ["b"], patterns: [] },
+        { name: "b", files: ["b/**"], extends: ["a"], patterns: [] },
+      ]),
+    ).toThrow(/circular `extends`/);
+  });
 });

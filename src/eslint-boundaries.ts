@@ -10,9 +10,10 @@
  * configs; the LAST matching config wins outright. So a file must get ALL its
  * forbidden patterns from a SINGLE config. Hence each boundary is ONE file
  * scope carrying a LIST of pattern groups (each with its own `allowTypeImports`
- * / message). When scopes nest (e.g. `apps/x/renderer/**` ⊂ `apps/x/**`),
- * author the narrower boundary to RE-INCLUDE the broader patterns and order it
- * later so it wins without losing the broader rule.
+ * / message). When scopes nest (e.g. `apps/x/renderer/**` ⊂ `apps/x/**`), the
+ * narrower boundary must carry the broader patterns too. Rather than copy-paste
+ * them, give it `extends: ["<broader-boundary>"]` — this module merges the named
+ * boundaries' patterns in ahead of its own, so each rule is authored ONCE.
  */
 
 export type BoundaryPattern = {
@@ -34,6 +35,10 @@ export type Boundary = {
   ignores?: string[];
   /** One or more forbidden-pattern groups applied to those files. */
   patterns: BoundaryPattern[];
+  /** Names of other boundaries whose `patterns` are merged in ahead of this
+   *  boundary's own. Lets a nested scope inherit a broader scope's rules
+   *  without copy-pasting them (only `patterns` are inherited, never `files`). */
+  extends?: string[];
 };
 
 export type BoundaryEslintConfig = {
@@ -43,7 +48,31 @@ export type BoundaryEslintConfig = {
   rules: Record<string, unknown>;
 };
 
+/** Effective patterns for a boundary: those of every `extends` ancestor (depth-first,
+ *  cycle-guarded) followed by the boundary's own. */
+function resolvePatterns(
+  b: Boundary,
+  byName: Map<string, Boundary>,
+  seen: Set<string>,
+): BoundaryPattern[] {
+  if (seen.has(b.name)) {
+    throw new Error(
+      `repo-gates boundaries: circular \`extends\` involving "${b.name}" (${[...seen, b.name].join(" → ")}).`,
+    );
+  }
+  const inherited: BoundaryPattern[] = [];
+  for (const parentName of b.extends ?? []) {
+    const parent = byName.get(parentName);
+    if (!parent) {
+      throw new Error(`repo-gates boundary "${b.name}" extends unknown boundary "${parentName}".`);
+    }
+    inherited.push(...resolvePatterns(parent, byName, new Set([...seen, b.name])));
+  }
+  return [...inherited, ...b.patterns];
+}
+
 export function boundariesToEslintConfigs(boundaries: Boundary[]): BoundaryEslintConfig[] {
+  const byName = new Map(boundaries.map((b) => [b.name, b]));
   return boundaries.map((b) => ({
     name: `repo-gates/boundary/${b.name}`,
     files: b.files,
@@ -52,7 +81,7 @@ export function boundariesToEslintConfigs(boundaries: Boundary[]): BoundaryEslin
       "@typescript-eslint/no-restricted-imports": [
         "error",
         {
-          patterns: b.patterns.map((p) => ({
+          patterns: resolvePatterns(b, byName, new Set()).map((p) => ({
             group: p.forbid,
             allowTypeImports: p.allowTypeImports ?? false,
             message: p.message ?? `Import boundary "${b.name}" violated.`,
