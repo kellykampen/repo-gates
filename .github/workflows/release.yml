@@ -1,7 +1,10 @@
 name: Release
 
-# Publishes @kellykampen/repo-gates to npm when a v* tag is pushed.
-# One-time setup: add an NPM_TOKEN repo secret (an npm automation/publish token).
+# Publishes @kellykampen/repo-gates to npm when a v* tag is pushed, via npm
+# Trusted Publishing (OIDC) — no NPM_TOKEN secret. One-time setup on npmjs.com:
+# configure a Trusted Publisher for this package pointing at
+# kellykampen/repo-gates + workflow "release.yml" (allowed action: npm publish).
+# Docs: https://docs.npmjs.com/trusted-publishers
 on:
   push:
     tags: ["v*"]
@@ -11,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # npm provenance
+      id-token: write # required for OIDC trusted publishing (+ provenance)
     steps:
       - uses: actions/checkout@v4
 
@@ -23,6 +26,10 @@ jobs:
           cache: pnpm
           registry-url: "https://registry.npmjs.org"
 
+      # Trusted publishing needs npm CLI >= 11.5.1; Node 22 ships npm 10.x.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -32,7 +39,6 @@ jobs:
       - name: Build
         run: pnpm run build
 
-      - name: Publish to npm
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # OIDC exchange happens automatically — no token. Provenance is attached.
+      - name: Publish to npm (trusted publishing)
+        run: npm publish --access public
