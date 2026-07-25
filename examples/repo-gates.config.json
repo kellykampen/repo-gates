@@ -1,0 +1,58 @@
+{
+  "$comment": "Illustrative config for a pnpm + turbo monorepo (an Electron-style desktop app, a web app, shared packages) — copy this file to your repo root as repo-gates.config.json and adjust the package names/paths. Anything omitted falls back to DEFAULT_CONFIG (see the README's Reference table). Unlike the README's jsonc snippet, this file is strict JSON — no // comments — since repo-gates.config.json itself is parsed strictly; use nested \"$comment\" keys for notes instead, as below.",
+  "runner": "pnpm run",
+
+  "coverage": {
+    "$comment": "check-coverage holds each package to its OWN floor (gates/coverage-budgets.json) — a well-covered package can't mask a thin one. `repo-gates check-coverage --init` seeds the floors from your current tree.",
+    "summaryGlobs": ["apps/*/coverage/coverage-summary.json", "packages/*/coverage/coverage-summary.json"]
+  },
+
+  "bundleSize": {
+    "$comment": "Each target is built via `turbo run build --filter <filter>` (cached), then dist is measured per bucket and ratcheted (raw + gzip totals, largest single chunk). `check-bundle-size --init` re-baselines.",
+    "targets": [
+      {
+        "name": "web",
+        "filter": "@acme/web",
+        "distDir": "apps/web/dist",
+        "buckets": { "js": [".js"], "css": [".css"] }
+      }
+    ]
+  },
+
+  "agents": {
+    "$comment": "check-agents fails if a `pnpm run <script>` or backticked path in these docs no longer resolves — keeps agent-facing docs honest as the repo changes.",
+    "targets": ["AGENTS.md"]
+  },
+
+  "report": {
+    "$comment": "Non-gating dashboard (report-test-timing) rendered into $GITHUB_STEP_SUMMARY — reads each package's junit output.",
+    "junitGlobs": ["apps/*/test-results/junit.xml", "packages/*/test-results/junit.xml"]
+  },
+
+  "$boundaries_comment": "Architectural import rules -> ESLint, via @kellykampen/repo-gates/eslint-boundaries (see README 'Import boundaries'). ESLint flat config is last-wins per rule, so each file scope is ONE boundary carrying ALL its pattern groups; nested scopes re-include the broader patterns via `extends` instead of copy-paste.",
+  "boundaries": [
+    {
+      "name": "no-cross-app",
+      "files": ["apps/**"],
+      "patterns": [
+        {
+          "forbid": ["@acme/web", "@acme/web/**", "@acme/desktop", "@acme/desktop/**"],
+          "message": "Apps must not import each other — share code through packages/*."
+        }
+      ]
+    },
+    {
+      "name": "desktop-renderer",
+      "files": ["apps/desktop/src/renderer/**"],
+      "ignores": ["**/*.test.ts", "**/*.test.tsx"],
+      "extends": ["no-cross-app"],
+      "patterns": [
+        {
+          "forbid": ["node:*", "better-sqlite3", "**/main/**"],
+          "allowTypeImports": true,
+          "message": "Renderer is a browser context — reach main via IPC, not a value import (import type is fine)."
+        }
+      ]
+    }
+  ]
+}
