@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Full gate battery for a pnpm + turbo monorepo, each gate as its own step for
+# legible logs. Keep this step list in lock-step with `pnpm run check:all`:
+# `check:ci-parity` (below) fails the build if a `pnpm run <script>` here
+# isn't reachable from check:all — add genuine CI-only steps (e.g. `build`,
+# the two report steps) to gates/ci-parity-config.json's `ciOnly` instead of
+# letting parity drift silently. Run the whole battery locally with
+# `pnpm run check:all`.
+#
+# Turbo Remote Cache (optional, e.g. Vercel's free tier): shared across every
+# branch, so a PR replays cached lint/typecheck/test/coverage/build results
+# for packages it didn't touch. Omit the env block below if you don't use a
+# remote cache — turbo just runs everything locally instead.
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Format check
+        run: pnpm run format:check
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Unused dependencies (knip)
+        run: pnpm run check:deps
+
+      - name: Copy-paste detection (jscpd)
+        run: pnpm run check:dups
+
+      - name: File-size ratchet
+        run: pnpm run check:size
+
+      - name: Debt-marker ratchet
+        run: pnpm run check:debt
+
+      - name: Agent-doc validation (AGENTS.md)
+        run: pnpm run check:agents
+
+      - name: Bundle-size ratchet (builds via turbo, then measures)
+        run: pnpm run check:bundle-size
+
+      # ONE test execution for the whole required check: check:coverage runs
+      # the suite once WITH coverage instrumentation, so it isn't run twice
+      # (a plain `test` pass then a separate coverage pass).
+      - name: Test + coverage ratchet (per-package floors)
+        run: pnpm run check:coverage
+
+      - name: CI parity with check:all
+        run: pnpm run check:ci-parity
+
+      # Non-gating dashboards → the GitHub step summary. `always()` so they
+      # still render if an earlier gate failed; they enforce nothing
+      # themselves (each ratchet gate above already fails the build).
+      - name: Test timing summary
+        if: always()
+        run: pnpm run report:test-timing
+
+      - name: Code-quality metrics summary
+        if: always()
+        run: pnpm run report:quality-metrics
+
+      - name: Build
+        run: pnpm run build

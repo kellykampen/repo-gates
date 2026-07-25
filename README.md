@@ -231,6 +231,17 @@ Run the battery as one job step (Node ≥ 18, deps installed):
 Keep the CI workflow and the `check-all` manifest in lock-step with
 `repo-gates check-ci-parity`.
 
+Full copy-paste-able GitHub Actions workflows, from a single `check-all` step
+up to a per-gate turborepo battery with remote caching, live in
+[`examples/github-actions/`](./examples/github-actions):
+
+- [`minimal.yml`](./examples/github-actions/minimal.yml) — one `check-all` step.
+- [`single-package.yml`](./examples/github-actions/single-package.yml) — gates
+  broken into individual steps for a single-package (or lightly-workspaced) repo.
+- [`monorepo-turborepo.yml`](./examples/github-actions/monorepo-turborepo.yml) —
+  the full battery (deps/dups/size/debt/agents/bundle-size/coverage ratchets +
+  Turbo remote cache) for a pnpm + turbo monorepo.
+
 ## Programmatic use
 
 ```ts

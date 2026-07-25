@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Gates broken into individual steps for legible logs (vs. one `check-all`
+# step — see minimal.yml). Keep this step list in lock-step with
+# `pnpm run check:all`: `check:ci-parity` fails the build if a `pnpm run
+# <script>` here isn't reachable from check:all (justify genuine CI-only
+# steps, e.g. `build`, in gates/ci-parity-config.json's `ciOnly`).
+#
+# Shape: a single-package (or lightly-workspaced) repo — no turbo, no
+# per-package coverage/bundle-size fan-out. For a turborepo monorepo with
+# per-package ratchets, see monorepo-turborepo.yml instead.
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Format check
+        run: pnpm run format:check
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: File-size ratchet
+        run: pnpm run check:size
+
+      - name: Debt-marker ratchet
+        run: pnpm run check:debt
+
+      - name: Test
+        run: pnpm run test
+
+      - name: CI parity with check:all
+        run: pnpm run check:ci-parity
+
+      - name: Build
+        run: pnpm run build

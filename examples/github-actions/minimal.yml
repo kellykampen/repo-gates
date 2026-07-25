@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Smallest possible wiring: one step runs the whole battery via `check-all`
+# (see the Wire it up / Quickstart sections of the README). Reach for the
+# `single-package.yml` or `monorepo-turborepo.yml` example instead once you
+# want each gate broken out into its own legible CI step.
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Quality gates (check-all)
+        run: pnpm exec repo-gates check-all
+
+      - name: Build
+        run: pnpm run build
