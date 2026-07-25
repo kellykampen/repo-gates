@@ -13,7 +13,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # required to create the GitHub Release below
       id-token: write # required for OIDC trusted publishing (+ provenance)
     steps:
       - uses: actions/checkout@v4
@@ -42,3 +42,9 @@ jobs:
       # OIDC exchange happens automatically — no token. Provenance is attached.
       - name: Publish to npm (trusted publishing)
         run: npm publish --access public
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --generate-notes
