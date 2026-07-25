@@ -101,7 +101,9 @@ what differs from your repo. JSON is parsed strictly (no `//` comments); use a
 ### Example
 
 A realistic config for a pnpm + turbo monorepo (an Electron app, a web app, shared
-packages):
+packages) — the annotated version below is jsonc for readability; a copy-pasteable,
+strictly-valid `repo-gates.config.json` (comments as `"$comment"` keys instead of
+`//`) lives at [`examples/repo-gates.config.json`](./examples/repo-gates.config.json):
 
 ```jsonc
 {
