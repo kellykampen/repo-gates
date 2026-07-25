@@ -2,8 +2,9 @@
 
 Config-driven quality gates for **turborepo** (and any) monorepos — one quiet
 `check-all` command that runs your whole battery (lint, format, typecheck, tests)
-alongside ratchet guards for file size, tech-debt markers, coverage, and bundle
-size, plus a CI-parity drift detector. The engine is repo-agnostic; your policy
+alongside ratchet guards for file size, tech-debt markers, circular imports,
+secret-shaped strings, coverage, and bundle size, plus a CI-parity drift
+detector and a PR docs-coverage gate. The engine is repo-agnostic; your policy
 lives in a single `repo-gates.config.json`.
 
 ## What it does
@@ -37,7 +38,10 @@ The gates:
 | `check-ci-parity`   | Fails when a `pnpm run <gate>` in `.github/workflows/ci*.yml` isn't reachable from `check-all` — kills CI/local drift.                                                                                                                     |
 | `check-size`        | Per-file line ceiling; large files are grandfathered and may only shrink. `--init` seeds baselines.                                                                                                                                       |
 | `check-debt`        | `TODO/FIXME/HACK/XXX` must carry a tracker ref (`ABC-123` / `#123` / URL) or be allowlisted. `--init` seeds the allowlist.                                                                                                                 |
+| `check-circular`    | Flags new circular-import groups (relative imports within `scanRoots`, resolved into a graph, reduced to strongly-connected components). Existing cycles are grandfathered. `--init` seeds the allowlist.                                |
+| `check-secrets`     | Static scan of every **git-tracked** file for credential-shaped strings (AWS/GitHub/Slack/Stripe/npm/Google keys, PEM headers, userinfo-in-URL). Findings are reported as a redacted fingerprint — never the matched text. Not a substitute for a dedicated secret scanner (gitleaks/trufflehog): no entropy analysis, no git-history scan. `--init` seeds the allowlist — review every entry, it silences whatever it captures. |
 | `check-agents`      | Fails if a `pnpm run <x>` or a backticked path in `AGENTS.md` no longer resolves.                                                                                                                                                         |
+| `check-docs-coverage` | PR gate: a changed "surface" (config-defined glob) must come with a docs change, or a `docs: n/a - <reason>` opt-out in the PR body. Reads the changed-file list from the GitHub API (`GITHUB_REPOSITORY`/`PR_NUMBER`/`GITHUB_TOKEN`/`PR_BODY`); a no-op outside a PR context (safe to include in `check:all`). See [CI](#ci) for wiring it as its own `pull_request`-triggered job. |
 | `check-coverage`    | Holds **each package** to its own floor (no repo-wide aggregate — a high package can't mask a low one); unlisted packages must meet a `default`. Floors ratchet up. `--init` seeds; `--skip-run` reuses existing summaries.                |
 | `check-bundle-size` | Builds each configured target (turbo, cached), then ratchets raw+gzip totals AND the largest single chunk per bucket. `--init` re-baselines.                                                                                              |
 | `report-test-timing` / `report-quality-metrics` | Non-gating dashboards → `$GITHUB_STEP_SUMMARY`.                                                                                                                                        |
@@ -45,8 +49,9 @@ The gates:
 ## Why
 
 - **One quiet command.** `check-all` is the single entry point — aligned pass/fail, a tally, and parsed failure signatures instead of a wall of logs. `--bail` stops early; `CHECK_ALL_VERBOSE=1` streams everything.
-- **Ratchets, not fixed limits.** File size, tech debt, coverage, and bundle size only move in the right direction. `--init` seeds each baseline from your current tree, so day one is green — no big cleanup up front.
+- **Ratchets, not fixed limits.** File size, tech debt, circular imports, secret-shaped strings, coverage, and bundle size only move in the right direction. `--init` seeds each baseline from your current tree, so day one is green — no big cleanup up front.
 - **Per-package coverage floors.** Each package is held to its own floor, so a well-covered package can't mask a thin one.
+- **Docs don't drift behind the product.** `check-docs-coverage` blocks a PR that changes a user-facing surface without touching docs — unless the author opts out on the record.
 - **CI ↔ local parity.** `check-ci-parity` fails if your CI workflow drifts from the `check-all` manifest, so "green locally" means "green in CI."
 - **Config-driven & reusable.** The engine ships no repo-specific assumptions; drop it into any repo and describe policy in one JSON file.
 
@@ -168,16 +173,23 @@ strictly-valid `repo-gates.config.json` (comments as `"$comment"` keys instead o
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `runner` | `"pnpm run"` | How a gate script is invoked (`"pnpm run"`, `"bun run"`, `"npm run"`). |
-| `gates` | 13-gate manifest | Ordered `{ name, conditional }[]`. **Core** gates (`conditional: false`: lint, format:check, typecheck, check:size, check:debt, test, check:ci-parity) must exist or the run fails; **conditional** gates (check:scripts, check:deps, check:dups, check:agents, check:bundle-size, check:coverage) run only if you define that script. Override to add/remove/reorder. |
-| `scanRoots` | `["apps","packages","scripts"]` | Roots the file-size + debt walkers scan. |
+| `gates` | 16-gate manifest | Ordered `{ name, conditional }[]`. **Core** gates (`conditional: false`: lint, format:check, typecheck, check:size, check:debt, test, check:ci-parity) must exist or the run fails; **conditional** gates (check:scripts, check:deps, check:dups, check:circular, check:secrets, check:agents, check:docs-coverage, check:bundle-size, check:coverage) run only if you define that script. Override to add/remove/reorder. |
+| `scanRoots` | `["apps","packages","scripts"]` | Roots the file-size + debt + circular-import walkers scan. |
 | `excludeDirSegments` | `node_modules`, `dist`, `out`, `.turbo`, `coverage`, … | Directory names pruned from scans. |
 | `excludePathPrefixes` | `[]` | Repo-relative path prefixes excluded from scans. |
-| `sourceExtensions` | `[".ts",".tsx"]` | Extensions the size/debt guards treat as source. |
+| `sourceExtensions` | `[".ts",".tsx"]` | Extensions the size/debt/circular-import guards treat as source. |
 | `fileSize.threshold` | `600` | Default per-file line ceiling (larger files are grandfathered in the budgets file). |
 | `fileSize.budgetsPath` | `gates/file-size-budgets.json` | Grandfathered per-file budgets (`check-size --init` seeds). |
 | `debt.markerTokens` | `["TODO","FIXME","HACK","XXX"]` | Tokens that must carry a tracker reference. |
 | `debt.trackerPatterns` | `ABC-123`, `#123`, URL | Regex sources for a valid tracker reference. |
 | `debt.allowlistPath` | `gates/debt-marker-allowlist.json` | Untracked-marker allowlist (`check-debt --init` seeds). |
+| `circular.allowlistPath` | `gates/circular-imports-allowlist.json` | Grandfathered circular-import groups (`check-circular --init` seeds). |
+| `secrets.patterns` | AWS/GitHub/Slack/Stripe/npm/Google key shapes, PEM headers, URL creds | Regex sources tested against every git-tracked line. |
+| `secrets.binaryExtensions` | images, fonts, archives, media | Extensions skipped as non-text. |
+| `secrets.allowlistPath` | `gates/secrets-allowlist.json` | Grandfathered findings (`check-secrets --init` seeds — review before trusting). |
+| `docsCoverage.surfaces` | `[]` (no-op) | `[{ label, glob, on: "added"\|"changed" }]` — user-facing surfaces that require docs when changed. |
+| `docsCoverage.docsGlobs` | `[]` | Globs a PR must touch for a triggered surface to count as documented. |
+| `docsCoverage.exclude` | `[]` | Globs removed from both surface and docs matching (tests, fixtures). |
 | `coverage.summaryGlobs` | `apps/*`, `packages/*` | Globs matching each package's `coverage-summary.json`. |
 | `coverage.budgetsPath` | `gates/coverage-budgets.json` | Per-package floors (`check-coverage --init` seeds; floors ratchet up). |
 | `bundleSize.targets` | `[]` (no-op) | `[{ name, filter, distDir, buckets }]` — built via turbo, then raw+gzip+largest-chunk ratcheted. |
@@ -241,8 +253,14 @@ up to a per-gate turborepo battery with remote caching, live in
 - [`single-package.yml`](./examples/github-actions/single-package.yml) — gates
   broken into individual steps for a single-package (or lightly-workspaced) repo.
 - [`monorepo-turborepo.yml`](./examples/github-actions/monorepo-turborepo.yml) —
-  the full battery (deps/dups/size/debt/agents/bundle-size/coverage ratchets +
-  Turbo remote cache) for a pnpm + turbo monorepo.
+  the full battery (deps/dups/size/debt/circular/secrets/agents/bundle-size/coverage
+  ratchets + Turbo remote cache) for a pnpm + turbo monorepo.
+- [`docs-coverage.yml`](./examples/github-actions/docs-coverage.yml) — `check-docs-coverage`
+  wired as its own `pull_request`-triggered job, passing `GITHUB_TOKEN`/`PR_NUMBER`/`PR_BODY`
+  from the event and checking out the PR's **base** commit (tamper-resistant — a PR can't
+  narrow its own docs-coverage policy to dodge the gate). Separate from the other examples
+  because it's a PR-diff gate, not part of the local `check:all` battery — see the config's
+  `docsCoverage` docs above.
 
 ## Programmatic use
 

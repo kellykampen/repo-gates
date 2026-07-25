@@ -24,6 +24,34 @@
     "targets": ["AGENTS.md"]
   },
 
+  "docsCoverage": {
+    "$comment": "check-docs-coverage: a PR touching one of these surface globs must also touch docsGlobs, or opt out with `docs: n/a - <reason>` in the PR body. Empty `surfaces` (the default) makes this a no-op — see examples/github-actions/docs-coverage.yml for the pull_request-triggered job this needs (GITHUB_TOKEN/PR_NUMBER/PR_BODY).",
+    "docsGlobs": ["apps/docs/content/**"],
+    "surfaces": [
+      { "label": "HTTP API endpoint", "glob": "packages/backend/src/http/**", "on": "changed" },
+      { "label": "web product page", "glob": "apps/web/src/pages/**", "on": "added" }
+    ],
+    "exclude": ["**/*.test.ts", "**/*.test.tsx"]
+  },
+
+  "$circular_comment": "check-circular needs no config to work — DEFAULT_CONFIG's scanRoots/allowlistPath are usually enough.",
+
+  "secrets": {
+    "$comment": "Arrays replace wholesale on overlay (no deep-merge — see README Configuration), so setting `patterns` REPLACES the built-in set, not adds to it. This is DEFAULT_CONFIG.secrets.patterns verbatim (AWS, AWS-temp, GitHub, Slack, Stripe, npm, Google, PEM header, URL-embedded-credentials, in that order) plus one custom pattern appended at the end — copy this whole array, don't just write your own.",
+    "patterns": [
+      "\\bAKIA[0-9A-Z]{16}\\b",
+      "\\bASIA[0-9A-Z]{16}\\b",
+      "\\bgh[pousr]_[A-Za-z0-9]{36,}\\b",
+      "\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b",
+      "\\bsk_(?:live|test)_[A-Za-z0-9]{16,}\\b",
+      "\\bnpm_[A-Za-z0-9]{36}\\b",
+      "\\bAIza[0-9A-Za-z_-]{35}\\b",
+      "-----BEGIN(?: RSA| EC| OPENSSH| DSA)? PRIVATE KEY-----",
+      "://[^/\\s:@]+:[^/\\s:@]+@",
+      "\\bacme_live_[A-Za-z0-9]{32}\\b"
+    ]
+  },
+
   "report": {
     "$comment": "Non-gating dashboard (report-test-timing) rendered into $GITHUB_STEP_SUMMARY — reads each package's junit output.",
     "junitGlobs": ["apps/*/test-results/junit.xml", "packages/*/test-results/junit.xml"]

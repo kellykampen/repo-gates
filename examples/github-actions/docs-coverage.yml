@@ -1,0 +1,55 @@
+name: Docs coverage
+
+# `check-docs-coverage` is a PR-diff gate (it needs a changed-file list and a PR
+# body), so it runs as its OWN pull_request-triggered job — not a step in the
+# main check:all battery in ci.yml (monorepo-turborepo.yml / single-package.yml).
+# What counts as a "surface" and where docs live is config-driven — see the
+# `docsCoverage` block in examples/repo-gates.config.json.
+#
+# Tamper-resistance: checks out the PR's BASE commit, not its head — so a PR
+# cannot narrow `surfaces`, widen `exclude`, or bump its own repo-gates
+# version to dodge the gate judging it. This works because the gate needs no
+# PR-head content: `fetchChangedFiles` gets the diff from the GitHub API
+# (checkout-independent), and the only things read off disk are
+# repo-gates.config.json's `docsCoverage` policy and the installed
+# `repo-gates` version — both pinned to base by checking out base.sha.
+#
+# Bootstrap: on the very PR that first adds `docsCoverage` config, the base
+# commit won't have it yet, so this runs as a no-op (empty `surfaces`) rather
+# than enforcing — same as any other PR before the policy exists on main.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  docs-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check docs coverage
+        env:
+          # Passed as env, never interpolated into a shell string.
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: pnpm exec repo-gates check-docs-coverage

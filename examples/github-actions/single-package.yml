@@ -52,6 +52,12 @@ jobs:
       - name: Debt-marker ratchet
         run: pnpm run check:debt
 
+      - name: Circular-import ratchet
+        run: pnpm run check:circular
+
+      - name: Secret-shaped-string ratchet
+        run: pnpm run check:secrets
+
       - name: Test
         run: pnpm run test
 
