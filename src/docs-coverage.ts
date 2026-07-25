@@ -151,8 +151,15 @@ export function evaluate(
 
 // --- GitHub plumbing ----------------------------------------------------------
 
+/** Percent-encode the characters a GitHub Actions workflow command treats
+ *  specially (`%`, `\r`, `\n`) so a multi-line message isn't mangled or
+ *  truncated. See https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands */
+export function escapeWorkflowCommand(message: string): string {
+  return message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+}
+
 function notice(message: string): void {
-  console.log(`::notice title=Docs coverage::${message}`);
+  console.log(`::notice title=Docs coverage::${escapeWorkflowCommand(message)}`);
 }
 
 export async function fetchChangedFiles(opts: {
@@ -171,6 +178,7 @@ export async function fetchChangedFiles(opts: {
           "X-GitHub-Api-Version": "2022-11-28",
           "User-Agent": "repo-gates-docs-coverage",
         },
+        signal: AbortSignal.timeout(15_000),
       },
     );
     if (!res.ok) {
@@ -244,6 +252,12 @@ export async function runDocsCoverage(ctx: Ctx): Promise<number> {
 // script did) without going through loadContext, if it wants to run this
 // from the base commit for tamper-resistance — see the README's CI section.
 export function readDocsCoverageConfig(path: string): DocsCoverageConfig {
-  return (JSON.parse(readFileSync(path, "utf8")) as { docsCoverage?: DocsCoverageConfig })
-    .docsCoverage ?? { docsGlobs: [], surfaces: [], exclude: [] };
+  const parsed = (
+    JSON.parse(readFileSync(path, "utf8")) as { docsCoverage?: Partial<DocsCoverageConfig> }
+  ).docsCoverage;
+  return {
+    docsGlobs: parsed?.docsGlobs ?? [],
+    surfaces: parsed?.surfaces ?? [],
+    exclude: parsed?.exclude ?? [],
+  };
 }

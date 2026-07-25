@@ -257,8 +257,10 @@ up to a per-gate turborepo battery with remote caching, live in
   ratchets + Turbo remote cache) for a pnpm + turbo monorepo.
 - [`docs-coverage.yml`](./examples/github-actions/docs-coverage.yml) — `check-docs-coverage`
   wired as its own `pull_request`-triggered job, passing `GITHUB_TOKEN`/`PR_NUMBER`/`PR_BODY`
-  from the event. Separate from the other examples because it's a PR-diff gate, not part
-  of the local `check:all` battery — see the config's `docsCoverage` docs above.
+  from the event and checking out the PR's **base** commit (tamper-resistant — a PR can't
+  narrow its own docs-coverage policy to dodge the gate). Separate from the other examples
+  because it's a PR-diff gate, not part of the local `check:all` battery — see the config's
+  `docsCoverage` docs above.
 
 ## Programmatic use
 

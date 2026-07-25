@@ -6,16 +6,17 @@ name: Docs coverage
 # What counts as a "surface" and where docs live is config-driven — see the
 # `docsCoverage` block in examples/repo-gates.config.json.
 #
-# Tamper-resistance note: this checks out the PR's own HEAD, so a PR can edit
-# its own repo-gates.config.json (e.g. narrow `surfaces` or widen `exclude`) to
-# weaken the gate judging it. fantastic-dev's original hand-rolled version of
-# this gate ran its script AND config from the base commit specifically to
-# close that hole (a PR cannot edit the base). Reproducing that here means
-# checking out the base ref, reading repo-gates.config.json from THAT
-# checkout, and passing it in some other way than "the installed package's
-# config resolution" — deliberately left out of this example to keep it
-# simple; add it if a PR narrowing its own docs-coverage policy is a real risk
-# for your repo.
+# Tamper-resistance: checks out the PR's BASE commit, not its head — so a PR
+# cannot narrow `surfaces`, widen `exclude`, or bump its own repo-gates
+# version to dodge the gate judging it. This works because the gate needs no
+# PR-head content: `fetchChangedFiles` gets the diff from the GitHub API
+# (checkout-independent), and the only things read off disk are
+# repo-gates.config.json's `docsCoverage` policy and the installed
+# `repo-gates` version — both pinned to base by checking out base.sha.
+#
+# Bootstrap: on the very PR that first adds `docsCoverage` config, the base
+# commit won't have it yet, so this runs as a no-op (empty `surfaces`) rather
+# than enforcing — same as any other PR before the policy exists on main.
 
 on:
   pull_request:
@@ -32,6 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
 
       - uses: pnpm/action-setup@v4

@@ -13,6 +13,14 @@
  * into `@acme/b` which imports `@acme/a`) — that needs package-graph
  * resolution this tool doesn't have.
  *
+ * Extraction is a regex over raw source text, not a syntax-aware parse — the
+ * same tradeoff `check-debt` makes for marker tokens. A specifier-shaped
+ * string inside a comment or a string literal (`const hint = 'from "./a"'`)
+ * can produce a false edge. A real parser would close this, at the cost of a
+ * TS/JS parser dependency this package otherwise has none of; not worth it
+ * for the rare false positive, which — like any regex-based gate — is fixed
+ * by allowlisting the resulting cycle.
+ *
  * Like `check-debt`, new cycles fail the gate; existing ones are
  * grandfathered into an allowlist (`path, path, …` signatures) that can
  * only shrink. `--init` seeds it from the current tree.
@@ -134,11 +142,13 @@ export function findCycles(graph: ReadonlyMap<string, ReadonlySet<string>>): str
 }
 
 export function buildGraph(ctx: Ctx): Map<string, Set<string>> {
-  const { scanRoots, excludeDirSegments, sourceExtensions } = ctx.config;
+  const { scanRoots, excludeDirSegments, excludePathPrefixes, sourceExtensions } = ctx.config;
   const graph = new Map<string, Set<string>>();
   for (const root of scanRoots) {
     for (const abs of walk(resolve(ctx.repoRoot, root), excludeDirSegments)) {
       if (!hasExtension(abs, sourceExtensions)) continue;
+      const rel = relative(ctx.repoRoot, abs).replaceAll("\\", "/");
+      if (excludePathPrefixes.some((prefix) => rel.startsWith(prefix))) continue;
       const source = readFileSync(abs, "utf8");
       const edges = graph.get(abs) ?? new Set<string>();
       for (const spec of extractRelativeSpecifiers(source)) {

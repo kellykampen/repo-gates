@@ -1,11 +1,16 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, type Ctx } from "./config.ts";
 import {
   escapeHatch,
+  escapeWorkflowCommand,
   evaluate,
   fetchChangedFiles,
   globToRegExp,
   hasDocsChange,
+  readDocsCoverageConfig,
   runDocsCoverage,
   stripFencedCode,
   triggeredSurfaces,
@@ -101,6 +106,15 @@ describe("escapeHatch", () => {
     expect(escapeHatch("```\ndocs: n/a\n```").present).toBe(false));
 });
 
+describe("escapeWorkflowCommand", () => {
+  it("percent-encodes %, \\r, and \\n", () => {
+    expect(escapeWorkflowCommand("100% done\r\nnext line")).toBe("100%25 done%0D%0Anext line");
+  });
+  it("leaves ordinary text untouched", () => {
+    expect(escapeWorkflowCommand("plain text")).toBe("plain text");
+  });
+});
+
 describe("stripFencedCode", () => {
   it("removes a fenced block", () => {
     expect(stripFencedCode("before\n```\ndocs: n/a\n```\nafter")).toBe("before\n\nafter");
@@ -144,27 +158,97 @@ describe("runDocsCoverage", () => {
     return { repoRoot: "/tmp", config: { ...DEFAULT_CONFIG, docsCoverage } };
   }
 
+  const ENV_KEYS = ["GITHUB_REPOSITORY", "PR_NUMBER", "GITHUB_TOKEN", "PR_BODY"] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  function withPrEnv(vars: Partial<Record<(typeof ENV_KEYS)[number], string>>): void {
+    for (const key of ENV_KEYS) {
+      saved[key] = process.env[key];
+      const value = vars[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+    globalThis.fetch = originalFetch;
+  });
+
+  function mockFiles(files: ChangedFile[]): void {
+    globalThis.fetch = vi.fn(
+      async () => new Response(JSON.stringify(files), { status: 200 }),
+    ) as unknown as typeof fetch;
+  }
+
   it("no-ops when no surfaces are configured", async () => {
     const code = await runDocsCoverage(ctxWith({ docsGlobs: [], surfaces: [], exclude: [] }));
     expect(code).toBe(0);
   });
 
   it("no-ops outside a PR context even with surfaces configured", async () => {
-    const saved = {
-      repo: process.env.GITHUB_REPOSITORY,
-      number: process.env.PR_NUMBER,
-      token: process.env.GITHUB_TOKEN,
-    };
-    delete process.env.GITHUB_REPOSITORY;
-    delete process.env.PR_NUMBER;
-    delete process.env.GITHUB_TOKEN;
-    try {
-      const code = await runDocsCoverage(ctxWith(config));
-      expect(code).toBe(0);
-    } finally {
-      if (saved.repo !== undefined) process.env.GITHUB_REPOSITORY = saved.repo;
-      if (saved.number !== undefined) process.env.PR_NUMBER = saved.number;
-      if (saved.token !== undefined) process.env.GITHUB_TOKEN = saved.token;
-    }
+    withPrEnv({});
+    const code = await runDocsCoverage(ctxWith(config));
+    expect(code).toBe(0);
+  });
+
+  it("rejects a non-numeric PR_NUMBER", async () => {
+    withPrEnv({ GITHUB_REPOSITORY: "acme/x", PR_NUMBER: "abc", GITHUB_TOKEN: "t" });
+    const code = await runDocsCoverage(ctxWith(config));
+    expect(code).toBe(1);
+  });
+
+  it("passes when a triggered surface's PR also touches docs", async () => {
+    withPrEnv({ GITHUB_REPOSITORY: "acme/x", PR_NUMBER: "1", GITHUB_TOKEN: "t" });
+    mockFiles([
+      { filename: HTTP, status: "modified" },
+      { filename: DOC, status: "added" },
+    ]);
+    expect(await runDocsCoverage(ctxWith(config))).toBe(0);
+  });
+
+  it("fails when a triggered surface's PR has no docs and no escape hatch", async () => {
+    withPrEnv({ GITHUB_REPOSITORY: "acme/x", PR_NUMBER: "1", GITHUB_TOKEN: "t" });
+    mockFiles([{ filename: HTTP, status: "modified" }]);
+    expect(await runDocsCoverage(ctxWith(config))).toBe(1);
+  });
+
+  it("passes (waived) when the PR body carries the escape hatch", async () => {
+    withPrEnv({
+      GITHUB_REPOSITORY: "acme/x",
+      PR_NUMBER: "1",
+      GITHUB_TOKEN: "t",
+      PR_BODY: "docs: n/a - internal only",
+    });
+    mockFiles([{ filename: HTTP, status: "modified" }]);
+    expect(await runDocsCoverage(ctxWith(config))).toBe(0);
+  });
+});
+
+describe("readDocsCoverageConfig", () => {
+  function writeConfig(content: unknown): string {
+    const dir = mkdtempSync(join(tmpdir(), "repo-gates-docscfg-"));
+    const path = join(dir, "repo-gates.config.json");
+    writeFileSync(path, JSON.stringify(content));
+    return path;
+  }
+
+  it("defaults every field when docsCoverage is absent", () => {
+    expect(readDocsCoverageConfig(writeConfig({}))).toEqual({
+      docsGlobs: [],
+      surfaces: [],
+      exclude: [],
+    });
+  });
+
+  it("defaults each field independently when docsCoverage is partial", () => {
+    const result = readDocsCoverageConfig(
+      writeConfig({ docsCoverage: { docsGlobs: ["docs/**"] } }),
+    );
+    expect(result).toEqual({ docsGlobs: ["docs/**"], surfaces: [], exclude: [] });
   });
 });

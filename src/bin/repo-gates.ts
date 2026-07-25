@@ -35,7 +35,7 @@ Commands:
   check-circular [--init]   Circular-import ratchet (--init seeds the allowlist)
   check-secrets [--init]    Secret-shaped-string ratchet (--init seeds the allowlist)
   check-coverage [--init]   Per-package coverage floors (--init seeds; --skip-run reuses summaries)
-  check-bundle-size [--init]Bundle raw+gzip+chunk ratchet (--init seeds)
+  check-bundle-size [--init] Bundle raw+gzip+chunk ratchet (--init seeds)
   check-agents              Validate AGENTS.md script/path references resolve
   check-docs-coverage       PR surface-vs-docs gate (no-op outside a PR context)
   check-ci-parity           Fail if CI workflows drift from the check:all manifest

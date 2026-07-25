@@ -103,4 +103,16 @@ describe("circular-import scan", () => {
     writeFileSync(join(root, "src/b.ts"), 'import "./a.ts";\n');
     expect(seedAllowlist(ctx)).toEqual(["src/a.ts, src/b.ts"]);
   });
+
+  it("honors excludePathPrefixes", () => {
+    const { ctx, root } = makeCtx();
+    mkdirSync(join(root, "src/generated"), { recursive: true });
+    writeFileSync(join(root, "src/generated/a.ts"), 'import "./b.ts";\n');
+    writeFileSync(join(root, "src/generated/b.ts"), 'import "./a.ts";\n');
+    const excluded: Ctx = {
+      ...ctx,
+      config: { ...ctx.config, excludePathPrefixes: ["src/generated"] },
+    };
+    expect(scan(excluded).untracked).toEqual([]);
+  });
 });
