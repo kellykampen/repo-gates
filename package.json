@@ -1,6 +1,6 @@
 {
   "name": "@kellykampen/repo-gates",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Config-driven repo quality gates for turborepo (and any) monorepos: a quiet check:all orchestrator, CI-parity drift detector, and ratchet guards (file size, debt markers, coverage, bundle size). The engine is repo-agnostic; policy lives in the consumer repo's config.",
   "keywords": [
     "turborepo",
