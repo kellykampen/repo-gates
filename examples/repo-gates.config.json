@@ -24,6 +24,18 @@
     "targets": ["AGENTS.md"]
   },
 
+  "docsCoverage": {
+    "$comment": "check-docs-coverage: a PR touching one of these surface globs must also touch docsGlobs, or opt out with `docs: n/a - <reason>` in the PR body. Empty `surfaces` (the default) makes this a no-op — see examples/github-actions/docs-coverage.yml for the pull_request-triggered job this needs (GITHUB_TOKEN/PR_NUMBER/PR_BODY).",
+    "docsGlobs": ["apps/docs/content/**"],
+    "surfaces": [
+      { "label": "HTTP API endpoint", "glob": "packages/backend/src/http/**", "on": "changed" },
+      { "label": "web product page", "glob": "apps/web/src/pages/**", "on": "added" }
+    ],
+    "exclude": ["**/*.test.ts", "**/*.test.tsx"]
+  },
+
+  "$circularSecrets_comment": "check-circular and check-secrets need no config to work — DEFAULT_CONFIG's scanRoots/allowlistPath/patterns are usually enough. Arrays replace wholesale on overlay (no deep-merge — see README Configuration), so overriding secrets.patterns REPLACES the built-in AWS/GitHub/Slack/Stripe/npm/Google/PEM/URL-credential set, not adds to it — copy DEFAULT_CONFIG.secrets.patterns (README Reference) alongside your own pattern if you want to keep both.",
+
   "report": {
     "$comment": "Non-gating dashboard (report-test-timing) rendered into $GITHUB_STEP_SUMMARY — reads each package's junit output.",
     "junitGlobs": ["apps/*/test-results/junit.xml", "packages/*/test-results/junit.xml"]

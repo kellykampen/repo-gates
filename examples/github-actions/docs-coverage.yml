@@ -1,0 +1,53 @@
+name: Docs coverage
+
+# `check-docs-coverage` is a PR-diff gate (it needs a changed-file list and a PR
+# body), so it runs as its OWN pull_request-triggered job — not a step in the
+# main check:all battery in ci.yml (monorepo-turborepo.yml / single-package.yml).
+# What counts as a "surface" and where docs live is config-driven — see the
+# `docsCoverage` block in examples/repo-gates.config.json.
+#
+# Tamper-resistance note: this checks out the PR's own HEAD, so a PR can edit
+# its own repo-gates.config.json (e.g. narrow `surfaces` or widen `exclude`) to
+# weaken the gate judging it. fantastic-dev's original hand-rolled version of
+# this gate ran its script AND config from the base commit specifically to
+# close that hole (a PR cannot edit the base). Reproducing that here means
+# checking out the base ref, reading repo-gates.config.json from THAT
+# checkout, and passing it in some other way than "the installed package's
+# config resolution" — deliberately left out of this example to keep it
+# simple; add it if a PR narrowing its own docs-coverage policy is a real risk
+# for your repo.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  docs-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check docs coverage
+        env:
+          # Passed as env, never interpolated into a shell string.
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: pnpm exec repo-gates check-docs-coverage

@@ -48,6 +48,21 @@ export type RepoGatesConfig = {
     /** Source strings for the RegExps that count as a "tracker reference". */
     trackerPatterns: string[];
   };
+  circular: {
+    /** Repo-relative path to the grandfathered circular-import allowlist. */
+    allowlistPath: string;
+  };
+  secrets: {
+    /** Repo-relative path to the grandfathered secret-finding allowlist. */
+    allowlistPath: string;
+    /** Source strings for the RegExps matched against every git-tracked
+     *  line (well-known credential shapes — AWS/GitHub/Slack/Stripe/npm/
+     *  Google API keys, PEM private-key headers). Findings are reported as
+     *  a redacted fingerprint, never the matched text. */
+    patterns: string[];
+    /** File extensions (with the dot) skipped as binary/non-text. */
+    binaryExtensions: string[];
+  };
   coverage: {
     /** Repo-relative path to the coverage floor JSON. */
     budgetsPath: string;
@@ -97,6 +112,23 @@ export type RepoGatesConfig = {
     /** Subcommands of runnerCommand that are builtins, not scripts (ignored). */
     ignoredSubcommands: string[];
   };
+  docsCoverage: {
+    /** Globs (repo-relative) a PR must touch for a triggered surface to
+     *  count as documented. Empty `surfaces` ⇒ the gate is a no-op. */
+    docsGlobs: string[];
+    /** User-facing surfaces that require docs when changed. */
+    surfaces: {
+      /** Human-readable label shown in the failure/notice output. */
+      label: string;
+      /** Glob matched against the PR's changed-file paths. */
+      glob: string;
+      /** "added" — only a brand-new file triggers; "changed" — added,
+       *  modified, renamed, or copied all trigger. */
+      on: "added" | "changed";
+    }[];
+    /** Globs removed from BOTH surface and docs matching (tests, fixtures). */
+    exclude: string[];
+  };
 };
 
 export const DEFAULT_CONFIG: RepoGatesConfig = {
@@ -110,7 +142,10 @@ export const DEFAULT_CONFIG: RepoGatesConfig = {
     { name: "check:dups", conditional: true },
     { name: "check:size", conditional: false },
     { name: "check:debt", conditional: false },
+    { name: "check:circular", conditional: true },
+    { name: "check:secrets", conditional: true },
     { name: "check:agents", conditional: true },
+    { name: "check:docs-coverage", conditional: true },
     { name: "check:bundle-size", conditional: true },
     { name: "test", conditional: false },
     { name: "check:coverage", conditional: true },
@@ -135,6 +170,39 @@ export const DEFAULT_CONFIG: RepoGatesConfig = {
     allowlistPath: "gates/debt-marker-allowlist.json",
     markerTokens: ["TODO", "FIXME", "HACK", "XXX"],
     trackerPatterns: ["\\b[A-Z]{2,}-\\d+\\b", "#\\d+\\b", "https?:\\/\\/\\S+"],
+  },
+  circular: { allowlistPath: "gates/circular-imports-allowlist.json" },
+  secrets: {
+    allowlistPath: "gates/secrets-allowlist.json",
+    patterns: [
+      "\\bAKIA[0-9A-Z]{16}\\b", // AWS access key
+      "\\bASIA[0-9A-Z]{16}\\b", // AWS temporary access key
+      "\\bgh[pousr]_[A-Za-z0-9]{36,}\\b", // GitHub personal/OAuth/app/refresh token
+      "\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b", // Slack token
+      "\\bsk_(?:live|test)_[A-Za-z0-9]{16,}\\b", // Stripe secret key
+      "\\bnpm_[A-Za-z0-9]{36}\\b", // npm access token
+      "\\bAIza[0-9A-Za-z_-]{35}\\b", // Google API key
+      "-----BEGIN(?: RSA| EC| OPENSSH| DSA)? PRIVATE KEY-----", // PEM private key
+      "://[^/\\s:@]+:[^/\\s:@]+@", // credentials embedded in a URL
+    ],
+    binaryExtensions: [
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".gif",
+      ".ico",
+      ".webp",
+      ".pdf",
+      ".zip",
+      ".gz",
+      ".woff",
+      ".woff2",
+      ".ttf",
+      ".eot",
+      ".mp4",
+      ".mp3",
+      ".wasm",
+    ],
   },
   coverage: {
     budgetsPath: "gates/coverage-budgets.json",
@@ -188,6 +256,7 @@ export const DEFAULT_CONFIG: RepoGatesConfig = {
       "create",
     ],
   },
+  docsCoverage: { docsGlobs: [], surfaces: [], exclude: [] },
 };
 
 export const CONFIG_FILENAMES = ["repo-gates.config.json"] as const;

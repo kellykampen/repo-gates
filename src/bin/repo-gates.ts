@@ -9,12 +9,15 @@
 import { runBundleSize } from "../bundle-size.ts";
 import { runCheckAll } from "../check-all.ts";
 import { runCiParity } from "../ci-parity.ts";
+import { runCircularImports } from "../circular-imports.ts";
 import { loadContext } from "../config.ts";
 import { runCoverage } from "../coverage.ts";
 import { runDebtMarkers } from "../debt-markers.ts";
+import { runDocsCoverage } from "../docs-coverage.ts";
 import { runFileSizes } from "../file-sizes.ts";
 import { runInit } from "../init.ts";
 import { runQualityMetrics, runTestTiming } from "../report.ts";
+import { runSecrets } from "../secrets.ts";
 import { runValidateAgents } from "../validate-agents.ts";
 
 const argv = process.argv.slice(2);
@@ -29,9 +32,12 @@ Commands:
   check-all [--bail]        Run the whole gate manifest (quiet; --bail stops at first fail)
   check-size [--init]       Per-file line-count ratchet (--init seeds baselines)
   check-debt [--init]       Debt-marker (TODO/FIXME) ratchet (--init seeds the allowlist)
+  check-circular [--init]   Circular-import ratchet (--init seeds the allowlist)
+  check-secrets [--init]    Secret-shaped-string ratchet (--init seeds the allowlist)
   check-coverage [--init]   Per-package coverage floors (--init seeds; --skip-run reuses summaries)
   check-bundle-size [--init]Bundle raw+gzip+chunk ratchet (--init seeds)
   check-agents              Validate AGENTS.md script/path references resolve
+  check-docs-coverage       PR surface-vs-docs gate (no-op outside a PR context)
   check-ci-parity           Fail if CI workflows drift from the check:all manifest
   report-test-timing        Non-gating test-timing dashboard (→ stdout / step summary)
   report-quality-metrics    Non-gating code-quality dashboard
@@ -63,6 +69,12 @@ if (cmd === "init") {
     case "check-debt":
       process.exitCode = runDebtMarkers(ctx, has("--init"));
       break;
+    case "check-circular":
+      process.exitCode = runCircularImports(ctx, has("--init"));
+      break;
+    case "check-secrets":
+      process.exitCode = runSecrets(ctx, has("--init"));
+      break;
     case "check-coverage":
       process.exitCode = runCoverage(ctx, { init: has("--init"), skipRun: has("--skip-run") });
       break;
@@ -71,6 +83,9 @@ if (cmd === "init") {
       break;
     case "check-agents":
       process.exitCode = runValidateAgents(ctx);
+      break;
+    case "check-docs-coverage":
+      process.exitCode = await runDocsCoverage(ctx);
       break;
     case "check-ci-parity":
       process.exitCode = runCiParity(ctx);
