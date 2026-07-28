@@ -23,6 +23,17 @@ describe("mergeConfig", () => {
   });
 });
 
+describe("DEFAULT_CONFIG", () => {
+  it("offers Shadscan as an opt-in conditional gate", () => {
+    const shadscanGate = DEFAULT_CONFIG.gates.find((gate) => gate.name === "check:shadscan");
+
+    expect(shadscanGate).toEqual({ name: "check:shadscan", conditional: true });
+    expect(DEFAULT_CONFIG.gates.indexOf(shadscanGate!)).toBeLessThan(
+      DEFAULT_CONFIG.gates.findIndex((gate) => gate.name === "check:ci-parity"),
+    );
+  });
+});
+
 describe("loadConfig", () => {
   it("falls back to defaults with no config file", () => {
     const dir = mkdtempSync(join(tmpdir(), "repo-gates-cfg-"));

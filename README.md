@@ -3,8 +3,8 @@
 Config-driven quality gates for **turborepo** (and any) monorepos — one quiet
 `check-all` command that runs your whole battery (lint, format, typecheck, tests)
 alongside ratchet guards for file size, tech-debt markers, circular imports,
-secret-shaped strings, coverage, and bundle size, plus a CI-parity drift
-detector and a PR docs-coverage gate. The engine is repo-agnostic; your policy
+secret-shaped strings, shadcn UI quality, coverage, and bundle size, plus a
+CI-parity drift detector and a PR docs-coverage gate. The engine is repo-agnostic; your policy
 lives in a single `repo-gates.config.json`.
 
 ## What it does
@@ -41,6 +41,7 @@ The gates:
 | `check-circular`    | Flags new circular-import groups (relative imports within `scanRoots`, resolved into a graph, reduced to strongly-connected components). Existing cycles are grandfathered. `--init` seeds the allowlist.                                |
 | `check-secrets`     | Static scan of every **git-tracked** file for credential-shaped strings (AWS/GitHub/Slack/Stripe/npm/Google keys, PEM headers, userinfo-in-URL). Findings are reported as a redacted fingerprint — never the matched text. Not a substitute for a dedicated secret scanner (gitleaks/trufflehog): no entropy analysis, no git-history scan. `--init` seeds the allowlist — review every entry, it silences whatever it captures. |
 | `check-agents`      | Fails if a `pnpm run <x>` or a backticked path in `AGENTS.md` no longer resolves.                                                                                                                                                         |
+| `check:shadscan`    | Optional consumer script for React repositories using shadcn/ui. Runs a pinned [Shadscan](https://www.shadscan.com/docs) audit and fails below the repository's ratcheted score floor. Defining the script automatically adds it to `check-all`; non-shadcn repositories omit it. |
 | `check-docs-coverage` | PR gate: a changed "surface" (config-defined glob) must come with a docs change, or a `docs: n/a - <reason>` opt-out in the PR body. Reads the changed-file list from the GitHub API (`GITHUB_REPOSITORY`/`PR_NUMBER`/`GITHUB_TOKEN`/`PR_BODY`); a no-op outside a PR context (safe to include in `check:all`). See [CI](#ci) for wiring it as its own `pull_request`-triggered job. |
 | `check-coverage`    | Holds **each package** to its own floor (no repo-wide aggregate — a high package can't mask a low one); unlisted packages must meet a `default`. Floors ratchet up. `--init` seeds; `--skip-run` reuses existing summaries.                |
 | `check-bundle-size` | Builds each configured target (turbo, cached), then ratchets raw+gzip totals AND the largest single chunk per bucket. `--init` re-baselines.                                                                                              |
@@ -49,7 +50,7 @@ The gates:
 ## Why
 
 - **One quiet command.** `check-all` is the single entry point — aligned pass/fail, a tally, and parsed failure signatures instead of a wall of logs. `--bail` stops early; `CHECK_ALL_VERBOSE=1` streams everything.
-- **Ratchets, not fixed limits.** File size, tech debt, circular imports, secret-shaped strings, coverage, and bundle size only move in the right direction. `--init` seeds each baseline from your current tree, so day one is green — no big cleanup up front.
+- **Ratchets, not fixed limits.** File size, tech debt, circular imports, secret-shaped strings, shadcn UI quality, coverage, and bundle size only move in the right direction. Seed each baseline from your current tree, so day one is green — no big cleanup up front.
 - **Per-package coverage floors.** Each package is held to its own floor, so a well-covered package can't mask a thin one.
 - **Docs don't drift behind the product.** `check-docs-coverage` blocks a PR that changes a user-facing surface without touching docs — unless the author opts out on the record.
 - **CI ↔ local parity.** `check-ci-parity` fails if your CI workflow drifts from the `check-all` manifest, so "green locally" means "green in CI."
@@ -85,11 +86,31 @@ pnpm exec repo-gates check-all     # run the whole battery
     "check:all": "repo-gates check-all",
     "check:size": "repo-gates check-size",
     "check:debt": "repo-gates check-debt",
+    "check:shadscan": "pnpm dlx @shadscan/cli@0.7.0 ./apps/web --json --fail-under 40 --no-roast --no-interactive",
     "check:coverage": "repo-gates check-coverage",
     "check:ci-parity": "repo-gates check-ci-parity"
   }
 }
 ```
+
+### Add the Shadscan ratchet for shadcn repositories
+
+Only define `check:shadscan` when the repository uses shadcn/ui. Run Shadscan
+once against the React application package, choose a conservative floor below
+or equal to the assessed score, and commit that floor as the starting ratchet:
+
+```bash
+pnpm dlx @shadscan/cli@0.7.0 ./apps/web --json --fail-under 40 --no-roast --no-interactive
+```
+
+Keep the CLI version exact so the same source is evaluated by the same ruleset
+locally and in CI. The default gate manifest treats `check:shadscan` as
+conditional: defining the package script includes it in `check-all` (and any
+pre-commit hook that runs `check-all`); omitting it leaves non-shadcn
+repositories unaffected. Raise `--fail-under` as findings are remediated, and
+never lower it to make a regression pass. See the [Shadscan pre-commit
+documentation](https://www.shadscan.com/docs#pre-commit) for hook-manager-specific
+wiring.
 
 ## How it finds your repo
 
@@ -173,7 +194,7 @@ strictly-valid `repo-gates.config.json` (comments as `"$comment"` keys instead o
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `runner` | `"pnpm run"` | How a gate script is invoked (`"pnpm run"`, `"bun run"`, `"npm run"`). |
-| `gates` | 16-gate manifest | Ordered `{ name, conditional }[]`. **Core** gates (`conditional: false`: lint, format:check, typecheck, check:size, check:debt, test, check:ci-parity) must exist or the run fails; **conditional** gates (check:scripts, check:deps, check:dups, check:circular, check:secrets, check:agents, check:docs-coverage, check:bundle-size, check:coverage) run only if you define that script. Override to add/remove/reorder. |
+| `gates` | 17-gate manifest | Ordered `{ name, conditional }[]`. **Core** gates (`conditional: false`: lint, format:check, typecheck, check:size, check:debt, test, check:ci-parity) must exist or the run fails; **conditional** gates (check:scripts, check:deps, check:dups, check:circular, check:secrets, check:agents, check:shadscan, check:docs-coverage, check:bundle-size, check:coverage) run only if you define that script. Override to add/remove/reorder. |
 | `scanRoots` | `["apps","packages","scripts"]` | Roots the file-size + debt + circular-import walkers scan. |
 | `excludeDirSegments` | `node_modules`, `dist`, `out`, `.turbo`, `coverage`, … | Directory names pruned from scans. |
 | `excludePathPrefixes` | `[]` | Repo-relative path prefixes excluded from scans. |

@@ -145,6 +145,7 @@ export const DEFAULT_CONFIG: RepoGatesConfig = {
     { name: "check:circular", conditional: true },
     { name: "check:secrets", conditional: true },
     { name: "check:agents", conditional: true },
+    { name: "check:shadscan", conditional: true },
     { name: "check:docs-coverage", conditional: true },
     { name: "check:bundle-size", conditional: true },
     { name: "test", conditional: false },
