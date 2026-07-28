@@ -58,6 +58,11 @@ jobs:
       - name: Secret-shaped-string ratchet
         run: pnpm run check:secrets
 
+      # Include this step only when package.json defines check:shadscan for a
+      # React application that uses shadcn/ui.
+      - name: Shadcn UI quality ratchet (Shadscan)
+        run: pnpm run check:shadscan
+
       - name: Test
         run: pnpm run test
 

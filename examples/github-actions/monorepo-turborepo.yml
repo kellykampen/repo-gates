@@ -73,6 +73,11 @@ jobs:
       - name: Agent-doc validation (AGENTS.md)
         run: pnpm run check:agents
 
+      # Include this step only when package.json defines check:shadscan for a
+      # React application that uses shadcn/ui.
+      - name: Shadcn UI quality ratchet (Shadscan)
+        run: pnpm run check:shadscan
+
       - name: Bundle-size ratchet (builds via turbo, then measures)
         run: pnpm run check:bundle-size
 

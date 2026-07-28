@@ -8,13 +8,16 @@ main README's [Wire it up](../../README.md#wire-it-up) section).
 | File | Shape | Gate steps |
 | --- | --- | --- |
 | [`minimal.yml`](./minimal.yml) | Any repo, smallest setup | One `repo-gates check-all` step |
-| [`single-package.yml`](./single-package.yml) | Single package or lightly-workspaced repo | lint, format, typecheck, size, debt, circular, secrets, test, ci-parity, build |
-| [`monorepo-turborepo.yml`](./monorepo-turborepo.yml) | pnpm + turbo monorepo | + deps (knip), dups (jscpd), circular, secrets, agents, bundle-size, coverage ratchets, Turbo remote cache, non-gating report steps |
+| [`single-package.yml`](./single-package.yml) | Single package or lightly-workspaced repo | lint, format, typecheck, size, debt, circular, secrets, optional Shadscan, test, ci-parity, build |
+| [`monorepo-turborepo.yml`](./monorepo-turborepo.yml) | pnpm + turbo monorepo | + deps (knip), dups (jscpd), circular, secrets, agents, optional Shadscan, bundle-size, coverage ratchets, Turbo remote cache, non-gating report steps |
 | [`docs-coverage.yml`](./docs-coverage.yml) | Any repo using `docsCoverage` | Its own `pull_request`-triggered job — `check-docs-coverage` needs a PR's changed-file list + body, so it can't live in the other workflows' `push`/`pull_request` battery |
 
 All three assume `pnpm`; swap the `pnpm/action-setup` + `pnpm install` steps
 for `npm ci` / `yarn install --frozen-lockfile` if you use a different package
 manager, and update the `pnpm run` steps to `npm run` / `yarn` accordingly.
+The Shadscan step is only for React repositories using shadcn/ui; omit it unless
+`package.json` defines the pinned `check:shadscan` script described in the main
+README.
 
 ## Why break `check-all` into individual steps at all?
 

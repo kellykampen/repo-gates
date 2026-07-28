@@ -24,6 +24,8 @@ Next steps:
        "check:debt":       "repo-gates check-debt",
        "check:coverage":   "repo-gates check-coverage",
        "check:ci-parity":  "repo-gates check-ci-parity"
+     shadcn/ui repos only: add a pinned check:shadscan script using your package
+     manager, application path, and assessed baseline floor (see README).
   2. Seed the ratchet baselines (writes into gates/):
        repo-gates check-size --init
        repo-gates check-debt --init
