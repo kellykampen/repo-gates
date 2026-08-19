@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, type Ctx } from "./config.ts";
 import {
   assertSafeDistDir,
@@ -27,6 +27,14 @@ import {
 } from "./bundle-size.ts";
 
 const BUCKETS = { js: [".js"], css: [".css"] };
+
+// Several tests silence console.error to capture it. Restoring inline only
+// covers the happy path: if the call under test throws, or an assertion
+// between the mock and the restore fails, the mock leaks into every later
+// test in the file and swallows its diagnostic output.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("measure", () => {
   it("aggregates raw bytes per bucket, ignores non-bucket files, recurses", () => {
@@ -197,10 +205,14 @@ describe("findDuplicateChunks", () => {
     writeBuild(dir, BUILD_Y);
 
     const dupes = findDuplicateChunks(measure(dir, BUCKETS));
+    // Code-unit order, not collation: "ProjectArea" precedes "index" because
+    // 'P' is 0x50 and 'i' is 0x69. Asserting the exact order is deliberate —
+    // it pins the output as stable across Node builds with and without full
+    // ICU data, which `localeCompare` would not be.
     expect(dupes.map((d) => `${d.bucket}:${d.logical}`)).toEqual([
       "css:styles.css",
-      "js:index.js",
       "js:ProjectArea.js",
+      "js:index.js",
     ]);
     const projectArea = dupes.find((d) => d.logical === "ProjectArea.js");
     expect(projectArea?.files.map((f) => f.name)).toEqual([
@@ -345,11 +357,10 @@ describe("runBundleSize failure message", () => {
     );
 
     const errors: string[] = [];
-    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
       errors.push(a.join(" "));
     });
     const exit = runBundleSize(ctx, false, { clean: cleanDist, build: restoringBuild(dist) });
-    spy.mockRestore();
 
     expect(exit).toBe(1);
     const message = errors.join("\n");
@@ -382,11 +393,10 @@ describe("runBundleSize empty measurement", () => {
     );
 
     const errors: string[] = [];
-    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
       errors.push(a.join(" "));
     });
     const exit = runBundleSize(ctx, false, { clean: cleanDist, build: () => 0 });
-    spy.mockRestore();
 
     expect(exit).toBe(1);
     expect(errors.join("\n")).toMatch(/holds no files matching/);
@@ -394,9 +404,8 @@ describe("runBundleSize empty measurement", () => {
 
   it("fails the same way under --init, rather than seeding a budget of pure headroom", () => {
     const { ctx, root } = makeBundleCtx();
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
     const exit = runBundleSize(ctx, true, { clean: cleanDist, build: () => 0 });
-    spy.mockRestore();
 
     expect(exit).toBe(1);
     expect(existsSync(join(root, "budgets.json"))).toBe(false);
@@ -500,6 +509,28 @@ describe("--init refuses at the boundary, not just in bulk", () => {
   });
 });
 
+describe("findDuplicateChunks output order", () => {
+  it("sorts files within a group regardless of the order they arrive in", () => {
+    // Built by hand rather than from disk on purpose: macOS APFS returns
+    // readdir entries already sorted, so a fixture written through `measure`
+    // cannot observe this sort at all. Linux ext4 hashes dirents and returns
+    // them in effectively arbitrary order, which is where the guard's output
+    // would otherwise vary run to run — including in CI.
+    const m: Measurement = {
+      buckets: { js: { raw: 800, gzip: 400, largest: 200 } },
+      files: [
+        { name: "ProjectArea-LeWXd_sH.js", dir: "", bucket: "js", raw: 400, gzip: 200 },
+        { name: "ProjectArea-DWbILnNi.js", dir: "", bucket: "js", raw: 400, gzip: 200 },
+      ],
+    };
+
+    expect(findDuplicateChunks(m)[0]?.files.map((f) => f.name)).toEqual([
+      "ProjectArea-DWbILnNi.js",
+      "ProjectArea-LeWXd_sH.js",
+    ]);
+  });
+});
+
 describe("assertSafeDistDir containment", () => {
   it("refuses a sibling directory whose path merely prefixes the repo root", () => {
     // `<base>/repo` vs `<base>/repoEVIL`: a containment test of
@@ -565,7 +596,7 @@ describe("--init refusal output", () => {
     }
 
     const errors: string[] = [];
-    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
       errors.push(a.join(" "));
     });
     runBundleSize(ctx, true, {
@@ -576,7 +607,6 @@ describe("--init refusal output", () => {
         return 0;
       },
     });
-    spy.mockRestore();
 
     const message = errors.join("\n");
     expect(message).toContain("7 chunk(s) emitted more than once");

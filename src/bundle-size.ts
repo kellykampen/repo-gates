@@ -201,6 +201,12 @@ export type DuplicateChunk = {
  *  yields an identical filename and overwrites rather than accumulates. The
  *  pairs even match in size, because what differs between them is usually the
  *  fixed-length hash inside an import specifier naming a sibling chunk. */
+/** Order by code unit, not `localeCompare`. Collation depends on the ICU data
+ *  the Node build ships with, so `"index"` sorts before `"ProjectArea"` under
+ *  full ICU and after it without — which would reorder both this diagnostic
+ *  output and any test asserting on it, for reasons unrelated to the bundle. */
+const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 export function findDuplicateChunks(m: Measurement): DuplicateChunk[] {
   const groups = new Map<string, DuplicateChunk>();
   for (const f of m.files) {
@@ -214,8 +220,8 @@ export function findDuplicateChunks(m: Measurement): DuplicateChunk[] {
   }
   return [...groups.values()]
     .filter((g) => g.files.length > 1)
-    .map((g) => ({ ...g, files: g.files.slice().sort((a, b) => a.name.localeCompare(b.name)) }))
-    .sort((a, b) => a.bucket.localeCompare(b.bucket) || a.logical.localeCompare(b.logical));
+    .map((g) => ({ ...g, files: g.files.slice().sort((a, b) => byCodeUnit(a.name, b.name)) }))
+    .sort((a, b) => byCodeUnit(a.bucket, b.bucket) || byCodeUnit(a.logical, b.logical));
 }
 
 export function loadBudgets(raw: string, source = "bundle-size-budgets"): Budgets {
@@ -302,7 +308,11 @@ export function runBundleSize(ctx: Ctx, init = false, deps: BundleSizeDeps = DEF
   if (buildExit !== 0) return buildExit;
 
   const path = resolve(ctx.repoRoot, budgetsPath);
-  const measurements: Record<string, Measurement> = {};
+  // Paired with its target rather than keyed by name, so there is no lookup
+  // that can miss. A `?? empty` fallback here would be the wrong default as
+  // well as unreachable: it would seed a budget of pure headroom, which is
+  // precisely what the empty-measurement guard below exists to refuse.
+  const measured: { target: (typeof targets)[number]; m: Measurement }[] = [];
   for (const t of targets) {
     const m = measure(resolve(ctx.repoRoot, t.distDir), t.buckets);
     // Nothing to measure is a broken build, not a bundle of size zero — and
@@ -315,13 +325,12 @@ export function runBundleSize(ctx: Ctx, init = false, deps: BundleSizeDeps = DEF
       );
       return 1;
     }
-    measurements[t.name] = m;
+    measured.push({ target: t, m });
   }
 
   if (init) {
     const budgets: Budgets = {};
-    for (const t of targets) {
-      const m = measurements[t.name] ?? { buckets: {}, files: [] };
+    for (const { target: t, m } of measured) {
       const duplicates = findDuplicateChunks(m);
       if (duplicates.length > 0) {
         console.error(
@@ -354,9 +363,7 @@ export function runBundleSize(ctx: Ctx, init = false, deps: BundleSizeDeps = DEF
   const budgets = loadBudgets(readFileSync(path, "utf8"), budgetsPath);
   const failures: Failure[] = [];
   const scoreParts: string[] = [];
-  for (const t of targets) {
-    const m = measurements[t.name];
-    if (!m) continue;
+  for (const { target: t, m } of measured) {
     const budget = budgets[t.name];
     if (!budget) {
       console.error(`check-bundle-size: no budget for target "${t.name}" — run --init.`);
