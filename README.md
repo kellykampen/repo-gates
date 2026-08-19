@@ -194,7 +194,7 @@ strictly-valid `repo-gates.config.json` (comments as `"$comment"` keys instead o
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `runner` | `"pnpm run"` | How a gate script is invoked (`"pnpm run"`, `"bun run"`, `"npm run"`). |
-| `gates` | 17-gate manifest | Ordered `{ name, conditional }[]`. **Core** gates (`conditional: false`: lint, format:check, typecheck, check:size, check:debt, test, check:ci-parity) must exist or the run fails; **conditional** gates (check:scripts, check:deps, check:dups, check:circular, check:secrets, check:agents, check:shadscan, check:docs-coverage, check:bundle-size, check:coverage) run only if you define that script. Override to add/remove/reorder. |
+| `gates` | 17-gate manifest | Ordered `{ name, conditional }[]`. A non-conditional gate in the selected manifest is required: it runs even when its script is missing, so the run fails loudly. Conditional gates run only if their script exists. Overriding this array replaces the default policy, so it is valid to omit `test` when `check:coverage` runs the complete suite with coverage (avoids executing the suite twice). |
 | `scanRoots` | `["apps","packages","scripts"]` | Roots the file-size + debt + circular-import walkers scan. |
 | `excludeDirSegments` | `node_modules`, `dist`, `out`, `.turbo`, `coverage`, … | Directory names pruned from scans. |
 | `excludePathPrefixes` | `[]` | Repo-relative path prefixes excluded from scans. |
