@@ -189,7 +189,21 @@ export type DuplicateChunk = {
   bucket: string;
   /** Directory-qualified, so `dist/esm/index.js` and `dist/cjs/index.js` — the
    *  normal shape of a dual-format library build — are not mistaken for one
-   *  chunk emitted twice. */
+   *  chunk emitted twice.
+   *
+   *  This is a deliberate trade, and it costs real detection. Pollution whose
+   *  two copies land in DIFFERENT directories now escapes: a build id in the
+   *  output path (`.next/static/<buildId>/`), a renamed assets dir, a hashed
+   *  directory name, or one copy at the top level and one under `assets/`.
+   *  Basename grouping caught those and this does not.
+   *
+   *  There is no local signal separating the two cases — `esm/x-AAAA.js` +
+   *  `cjs/x-BBBB.js` and `build1/x-AAAA.js` + `build2/x-BBBB.js` are the same
+   *  shape. The trade goes this way because the failure modes are not
+   *  symmetric: a false positive REFUSES a clean dist and tells the operator to
+   *  remove it and re-run, which reproduces the refusal forever, while a false
+   *  negative loses one backstop. `cleanDist` is the actual defence against
+   *  layered output; this only catches a dist someone else laid out. */
   logical: string;
   files: { name: string; raw: number }[];
 };

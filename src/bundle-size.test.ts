@@ -447,6 +447,18 @@ describe("logicalChunkName does not mistake words for hashes", () => {
     expect(logicalChunkName("prosemirror-llO5iolO.js")).toBe("prosemirror.js");
   });
 
+  it("accepts a digest at the two-capital boundary", () => {
+    // Exactly two capitals, no digit — the minimum the rule admits, and about
+    // 2.6% of real digests. Without this, the threshold could be raised to
+    // three and nothing would notice.
+    expect(logicalChunkName("index-AbCdefgh.js")).toBe("index.js");
+  });
+
+  it("accepts a long hex digest that the other arms would reject", () => {
+    // All a-f, no digit, no capitals: only the long-hex arm admits it.
+    expect(logicalChunkName("framework-abcdefabcdefabcd.js")).toBe("framework.js");
+  });
+
   it("accepts a digit-bearing digest that carries no capitals at all", () => {
     // `a1b2c3d4` has zero uppercase letters, so the capital-count rule alone
     // would reject it. Only the digit arm admits it — and no English word used
@@ -553,8 +565,13 @@ describe("assertSafeDistDir containment", () => {
   it("refuses a path that leaves the repo THROUGH a symlink", () => {
     // resolve() is purely lexical, so the string looks contained while rmSync
     // would follow the link straight out of the tree.
-    const root = mkdtempSync(join(tmpdir(), "rg-root-"));
-    const outside = mkdtempSync(join(tmpdir(), "rg-outside-"));
+    // Both realpath'd, for the same reason the sibling-prefix test above needs
+    // it: assertSafeDistDir realpaths the root internally, so an unresolved
+    // /var root would disagree with a /private/var target and the assertion
+    // would pass on the mount-point mismatch rather than on the symlink —
+    // green even with the symlink resolution removed entirely.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "rg-root-")));
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "rg-outside-")));
     mkdirSync(join(outside, "dist"), { recursive: true });
     writeFileSync(join(outside, "dist", "VICTIM.txt"), "do not delete me");
     symlinkSync(outside, join(root, "linkdir"));
