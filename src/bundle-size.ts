@@ -89,7 +89,14 @@ export function measure(distDir: string, buckets: BucketDef): Measurement {
       // No explicit isSymbolicLink() branch is needed: under lstat a link is
       // neither a file nor a directory, so the isFile() check below already
       // drops it. An extra guard would be unreachable, and an unreachable
-      // guard is one nothing can test.
+      // guard is one nothing can test — worse, it would absorb any mutation of
+      // the isFile() check and leave that untested too.
+      //
+      // The trade: a build that legitimately symlinks its own outputs into
+      // dist would now be UNDER-counted, which is the fail-open direction for a
+      // ratchet. No bundler is known to do this, and the empty-measurement
+      // guard below still catches the total case, but the exposure is real
+      // rather than hypothetical and belongs on the record.
       const st = lstatSync(full);
       if (st.isDirectory()) {
         walk(full, relative ? posix.join(relative, entry) : entry);

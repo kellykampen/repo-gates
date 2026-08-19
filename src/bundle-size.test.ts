@@ -510,6 +510,21 @@ describe("findDuplicateChunks is directory-aware", () => {
     expect(findDuplicateChunks(measure(dir, BUCKETS))).toEqual([]);
   });
 
+  it("keeps directories distinct more than one level deep", () => {
+    // The parent path has to ACCUMULATE as the walk descends. Passing only the
+    // current entry name collapses dist/esm/chunks and dist/cjs/chunks to the
+    // same "chunks", which reinstates exactly the false refusal that directory
+    // qualification was added to remove — just one level further down than the
+    // fixture above reaches.
+    const dir = mkdtempSync(join(tmpdir(), "rg-nested-"));
+    writeBuild(join(dir, "esm", "chunks"), { "shared-CEyAyFk-.js": 400 });
+    writeBuild(join(dir, "cjs", "chunks"), { "shared-CiJes0HC.js": 400 });
+
+    const m = measure(dir, BUCKETS);
+    expect(m.files.map((f) => f.dir).sort()).toEqual(["cjs/chunks", "esm/chunks"]);
+    expect(findDuplicateChunks(m)).toEqual([]);
+  });
+
   it("still pairs two builds layered in the SAME directory", () => {
     const dir = mkdtempSync(join(tmpdir(), "rg-same-"));
     writeBuild(join(dir, "esm"), {
