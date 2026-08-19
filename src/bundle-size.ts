@@ -237,7 +237,18 @@ export function runBundleSize(ctx: Ctx, init = false, deps: BundleSizeDeps = DEF
   const path = resolve(ctx.repoRoot, budgetsPath);
   const measurements: Record<string, Measurement> = {};
   for (const t of targets) {
-    measurements[t.name] = measure(resolve(ctx.repoRoot, t.distDir), t.buckets);
+    const m = measure(resolve(ctx.repoRoot, t.distDir), t.buckets);
+    // Nothing to measure is a broken build, not a bundle of size zero — and
+    // every ratchet passes trivially against it. This mattered less when the
+    // dist dir was left alone, because a stale build masked the emptiness;
+    // now that it is cleaned first, an output-less build would sail through.
+    if (m.files.length === 0) {
+      console.error(
+        `check-bundle-size: ${t.distDir} holds no files matching ${t.name}'s buckets (${Object.keys(t.buckets).join(", ")}) after building. Nothing was measured, so the ratchet would pass regardless of the real size.`,
+      );
+      return 1;
+    }
+    measurements[t.name] = m;
   }
 
   if (init) {

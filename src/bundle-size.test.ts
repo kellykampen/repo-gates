@@ -359,3 +359,38 @@ describe("runBundleSize failure message", () => {
     expect(message.indexOf("confirm the growth is real")).toBeLessThan(message.indexOf("--init"));
   });
 });
+
+describe("runBundleSize empty measurement", () => {
+  it("fails when the build emitted nothing, instead of passing a zero-size ratchet", () => {
+    // Cleaning dist first means a build that produces no output leaves an empty
+    // directory — and every ratchet compares `actual > cap`, so zero passes
+    // everything. Without this guard a broken build reports "guard ok".
+    const { ctx, root } = makeBundleCtx();
+    writeFileSync(
+      join(root, "budgets.json"),
+      JSON.stringify({
+        web: { totals: { raw: { js: 1, css: 1 }, gzip: { js: 1, css: 1 } }, largest: { gzip: { js: 1, css: 1 } } },
+      }),
+    );
+
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.join(" "));
+    });
+    const exit = runBundleSize(ctx, false, { clean: cleanDist, build: () => 0 });
+    spy.mockRestore();
+
+    expect(exit).toBe(1);
+    expect(errors.join("\n")).toMatch(/holds no files matching/);
+  });
+
+  it("fails the same way under --init, rather than seeding a budget of pure headroom", () => {
+    const { ctx, root } = makeBundleCtx();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exit = runBundleSize(ctx, true, { clean: cleanDist, build: () => 0 });
+    spy.mockRestore();
+
+    expect(exit).toBe(1);
+    expect(existsSync(join(root, "budgets.json"))).toBe(false);
+  });
+});
