@@ -156,7 +156,12 @@ export function assertSafeDistDir(distDir: string, repoRoot: string): string {
   const rawRoot = resolve(repoRoot);
   const root = existsSync(rawRoot) ? realpathSync(rawRoot) : rawRoot;
   const dir = resolveParentThroughSymlinks(resolve(rawRoot, distDir));
-  if (dir === root || !dir.startsWith(`${root}${sep}`)) {
+  // Normalised, not relaxed: for `/repo` this is `/repo/`, exactly as before.
+  // It differs only when the root already ends in a separator — a filesystem
+  // root — where `${root}${sep}` built a malformed `//` and refused every
+  // legitimate child. The `dir === root` guard still rejects the root itself.
+  const rootPrefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  if (dir === root || !dir.startsWith(rootPrefix)) {
     throw new Error(
       `check-bundle-size: distDir ${JSON.stringify(distDir)} resolves to ${dir}, which is not inside ${root}. Refusing to remove it.`,
     );
