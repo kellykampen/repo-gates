@@ -17,7 +17,10 @@ export type GateSpec = {
   /** The package.json script name, e.g. "typecheck" or "check:size". */
   name: string;
   /** Conditional gates run only when the consumer's package.json defines
-   *  them; core gates (conditional: false) must exist or the run fails. */
+   *  them; non-conditional gates in the selected manifest run even when the
+   *  consumer does not define a matching script, so a missing required gate
+   *  fails loudly. Consumers that replace the default manifest own that
+   *  policy (for example, a coverage-backed test gate may replace `test`). */
   conditional: boolean;
 };
 

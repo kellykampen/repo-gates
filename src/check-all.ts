@@ -2,8 +2,10 @@
  * Quiet, manifest-driven gate runner (the `check:all` engine).
  *
  * Resolves its gate manifest from the consumer's {@link RepoGatesConfig}
- * filtered against the repo's package.json: core gates are mandatory (a
- * missing one fails the run); conditional gates run only when defined.
+ * filtered against the repo's package.json: required gates in the selected
+ * manifest are mandatory (a missing one fails the run); conditional gates run
+ * only when defined. A consumer may deliberately replace the default manifest
+ * — for example, with a coverage-backed test gate instead of a plain test run.
  *
  * Output contract ("quiet"):
  *   - one aligned `<status> <gate> (N.Ns)` line per gate
@@ -19,8 +21,8 @@ import type { Ctx, GateSpec } from "./config.ts";
 import { loadScripts } from "./lib/pkg.ts";
 
 /**
- * Resolve the manifest: every core gate (whether or not the repo defines
- * it — a missing core gate must fail loudly, not silently narrow the
+ * Resolve the manifest: every required gate (whether or not the repo defines
+ * it — a missing required gate must fail loudly, not silently narrow the
  * manifest) plus each conditional gate the repo's package.json defines.
  */
 export function resolveGates(
