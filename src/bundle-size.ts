@@ -9,13 +9,21 @@
  *
  * The ratchet only goes DOWN: code-split / trim deps, then lower the
  * budget. `--init` re-baselines from a fresh build (measured + headroom).
+ *
+ * Each target's dist dir is REMOVED before the build. A build tool empties
+ * its own output dir, but a cache hit skips the tool entirely and restores
+ * cached outputs *into* whatever is already there — restore is additive,
+ * because the cache cannot know which foreign files are safe to delete. Two
+ * builds' hash-suffixed chunks then coexist and every one of them is counted.
+ * Cleaning first makes restore exact and keeps the cache: the measurement
+ * becomes a function of the build rather than of the directory's history.
  * Especially valuable for the Cloudflare worker target, where the bundle
  * has a HARD size limit — this fails the PR instead of the prod deploy.
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { Ctx } from "./config.ts";
 
@@ -77,6 +85,70 @@ export function measure(distDir: string, buckets: BucketDef): Measurement {
   };
   walk(distDir);
   return out;
+}
+
+/** A dist dir must sit strictly inside the repo and name a real subdirectory.
+ *  `cleanDist` deletes recursively, so a config typo that resolved to the repo
+ *  root — or anywhere above it — would take the working tree with it. */
+export function assertSafeDistDir(distDir: string, repoRoot: string): string {
+  const root = resolve(repoRoot);
+  const dir = resolve(root, distDir);
+  if (dir === root || !dir.startsWith(`${root}${sep}`)) {
+    throw new Error(
+      `check-bundle-size: distDir ${JSON.stringify(distDir)} resolves to ${dir}, which is not inside ${root}. Refusing to remove it.`,
+    );
+  }
+  return dir;
+}
+
+/** Remove a target's dist dir so the build writes into an empty directory.
+ *  Missing is fine — that is the state we are trying to reach. */
+export function cleanDist(distDir: string, repoRoot: string): void {
+  rmSync(assertSafeDistDir(distDir, repoRoot), { recursive: true, force: true });
+}
+
+/** Matches a trailing content hash. Two shapes, both deliberately narrow:
+ *  Rollup/Vite's default base64url digest, which is EXACTLY 8 chars and may
+ *  contain `-`/`_` at either end (`index--GMgTQRt.js`, `index-CEyAyFk-.js`);
+ *  and a long lowercase-hex digest as webpack and friends emit.
+ *
+ *  Width is what separates a hash from a word, because the alphabets overlap.
+ *  Allowing "8 or more" would eat the tail of `use-callback-ref.js` and leave
+ *  `use.js` — which would then collide with every other `use-*` chunk and make
+ *  the guard refuse to seed a clean dist. A miss here is cheap (cleanDist
+ *  already prevents the pollution); a false positive blocks a real re-baseline. */
+const CHUNK_HASH = /-(?:[A-Za-z0-9_-]{8}|[0-9a-f]{16,})(\.[^.]+)$/;
+
+/** Strip a content hash so two builds of the same chunk share a name:
+ *  `ProjectArea-DWbILnNi.js` and `ProjectArea-LeWXd_sH.js` both become
+ *  `ProjectArea.js`, while `use-callback-ref.js` and `index.js` are untouched. */
+export function logicalChunkName(name: string): string {
+  return name.replace(CHUNK_HASH, "$1");
+}
+
+export type DuplicateChunk = { bucket: string; logical: string; files: { name: string; raw: number }[] };
+
+/** Find chunks that appear more than once under different content hashes.
+ *
+ *  This is the fingerprint of a dist dir holding two builds. It cannot arise
+ *  from one build: a hash names the chunk's own bytes, so identical content
+ *  yields an identical filename and overwrites rather than accumulates. The
+ *  pairs even match in size, because what differs between them is usually the
+ *  fixed-length hash inside an import specifier naming a sibling chunk. */
+export function findDuplicateChunks(m: Measurement): DuplicateChunk[] {
+  const groups = new Map<string, DuplicateChunk>();
+  for (const f of m.files) {
+    const logical = logicalChunkName(f.name);
+    if (logical === f.name) continue; // unhashed name — nothing to collide on
+    const key = `${f.bucket}\u0000${logical}`;
+    const group = groups.get(key) ?? { bucket: f.bucket, logical, files: [] };
+    group.files.push({ name: f.name, raw: f.raw });
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .filter((g) => g.files.length > 1)
+    .map((g) => ({ ...g, files: g.files.slice().sort((a, b) => a.name.localeCompare(b.name)) }))
+    .sort((a, b) => a.bucket.localeCompare(b.bucket) || a.logical.localeCompare(b.logical));
 }
 
 export function loadBudgets(raw: string, source = "bundle-size-budgets"): Budgets {
@@ -141,14 +213,25 @@ function buildTargets(ctx: Ctx): number {
   return proc.status ?? 1;
 }
 
+/** Seams for the two effects the guard performs before it can measure.
+ *  Exposed so tests can assert the ORDER: cleaning after the build would
+ *  delete the outputs, and cleaning is only useful before one. */
+export type BundleSizeDeps = {
+  clean: (distDir: string, repoRoot: string) => void;
+  build: (ctx: Ctx) => number;
+};
+
+const DEFAULT_DEPS: BundleSizeDeps = { clean: cleanDist, build: buildTargets };
+
 /** Run the bundle-size guard. Returns the process exit code. */
-export function runBundleSize(ctx: Ctx, init = false): number {
+export function runBundleSize(ctx: Ctx, init = false, deps: BundleSizeDeps = DEFAULT_DEPS): number {
   const { budgetsPath, targets } = ctx.config.bundleSize;
   if (targets.length === 0) {
     console.log("Bundle-size guard: no targets configured — skipping.");
     return 0;
   }
-  const buildExit = buildTargets(ctx);
+  for (const t of targets) deps.clean(t.distDir, ctx.repoRoot);
+  const buildExit = deps.build(ctx);
   if (buildExit !== 0) return buildExit;
 
   const path = resolve(ctx.repoRoot, budgetsPath);
@@ -159,8 +242,26 @@ export function runBundleSize(ctx: Ctx, init = false): number {
 
   if (init) {
     const budgets: Budgets = {};
-    for (const t of targets)
-      budgets[t.name] = seedBudget(measurements[t.name] ?? { buckets: {}, files: [] });
+    for (const t of targets) {
+      const m = measurements[t.name] ?? { buckets: {}, files: [] };
+      const duplicates = findDuplicateChunks(m);
+      if (duplicates.length > 0) {
+        console.error(
+          `check-bundle-size: refusing to seed "${t.name}" — ${t.distDir} holds ${duplicates.length} chunk(s) emitted more than once:`,
+        );
+        for (const d of duplicates.slice(0, 5)) {
+          console.error(`  ${d.logical}: ${d.files.map((f) => `${f.name} (${f.raw} B)`).join(", ")}`);
+        }
+        if (duplicates.length > 5) console.error(`  … and ${duplicates.length - 5} more`);
+        console.error(
+          `\nOne build cannot emit the same chunk twice, so this directory holds output from two. ` +
+            `A budget seeded from it would be inflated by the surplus and, because the ratchet only ` +
+            `goes DOWN, nothing later would catch it.\nRemove ${t.distDir} and re-run.`,
+        );
+        return 1;
+      }
+      budgets[t.name] = seedBudget(m);
+    }
     const file = {
       _comment:
         "Bundle-size budgets per target (bytes). Ratchet only goes DOWN — code-split/trim, " +
@@ -196,8 +297,12 @@ export function runBundleSize(ctx: Ctx, init = false): number {
       );
     }
     console.error(
-      "\nCode-split or trim deps to stay under budget. If the growth is intentional, " +
-        "re-baseline with `pnpm run check:bundle-size -- --init` and commit the budget diff.",
+      "\nCode-split or trim deps to stay under budget.\n\n" +
+        "Before re-baselining, confirm the growth is real: a budget seeded from a bad " +
+        "measurement raises the ceiling permanently, and the ratchet only goes DOWN, so " +
+        "nothing later will catch it. Check that the reported size matches what the build " +
+        "actually emitted. Only if the growth is intentional, re-baseline with " +
+        "`pnpm run check:bundle-size -- --init` and commit the budget diff.",
     );
     return 1;
   }
