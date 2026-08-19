@@ -22,8 +22,16 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, posix, resolve, sep } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { Ctx } from "./config.ts";
 
@@ -31,7 +39,10 @@ type BucketDef = Record<string, string[]>;
 export type BucketSize = { raw: number; gzip: number; largest: number };
 export type Measurement = {
   buckets: Record<string, BucketSize>;
-  files: { name: string; bucket: string; raw: number; gzip: number }[];
+  /** `dir` is the slash-separated path from distDir to the file's directory
+   *  (`""` at the top level). `name` stays the bare basename so existing
+   *  consumers are unaffected. */
+  files: { name: string; dir: string; bucket: string; raw: number; gzip: number }[];
 };
 export type TargetBudget = {
   totals: { raw: Record<string, number>; gzip: Record<string, number> };
@@ -61,12 +72,12 @@ export function measure(distDir: string, buckets: BucketDef): Measurement {
   const out: Measurement = { buckets: {}, files: [] };
   for (const b of Object.keys(buckets)) out.buckets[b] = { raw: 0, gzip: 0, largest: 0 };
   if (!existsSync(distDir)) return out;
-  const walk = (dir: string): void => {
+  const walk = (dir: string, relative: string): void => {
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry);
       const st = statSync(full);
       if (st.isDirectory()) {
-        walk(full);
+        walk(full, relative ? posix.join(relative, entry) : entry);
         continue;
       }
       if (!st.isFile()) continue;
@@ -75,7 +86,7 @@ export function measure(distDir: string, buckets: BucketDef): Measurement {
       const buf = readFileSync(full);
       const raw = buf.length;
       const gzip = gzipSync(buf).length;
-      out.files.push({ name: entry, bucket, raw, gzip });
+      out.files.push({ name: entry, dir: relative, bucket, raw, gzip });
       const acc = out.buckets[bucket];
       if (!acc) continue;
       acc.raw += raw;
@@ -83,16 +94,46 @@ export function measure(distDir: string, buckets: BucketDef): Measurement {
       if (gzip > acc.largest) acc.largest = gzip;
     }
   };
-  walk(distDir);
+  walk(distDir, "");
   return out;
 }
 
-/** A dist dir must sit strictly inside the repo and name a real subdirectory.
- *  `cleanDist` deletes recursively, so a config typo that resolved to the repo
- *  root — or anywhere above it — would take the working tree with it. */
+/** Resolve a path's PARENT chain through any symlinks, leaving the final
+ *  component alone.
+ *
+ *  `resolve()` is purely lexical — it collapses `..` as string arithmetic and
+ *  never consults the filesystem — so `<root>/link/dist` passes a containment
+ *  test on the string while `rmSync` happily follows `link` out of the repo.
+ *
+ *  The final component is deliberately NOT resolved: if the dist dir is itself
+ *  a symlink, `rmSync` unlinks the link and leaves its target intact, which is
+ *  the behaviour we want. Resolving it here would turn that into deleting the
+ *  target. Components that do not exist yet cannot be symlinks, so walking up
+ *  to the deepest existing ancestor is sufficient. */
+function resolveParentThroughSymlinks(path: string): string {
+  const trailing: string[] = [];
+  let cursor = dirname(path);
+  for (;;) {
+    if (existsSync(cursor)) {
+      return join(realpathSync(cursor), ...trailing.reverse(), basename(path));
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) return path; // reached the filesystem root, nothing exists
+    trailing.push(basename(cursor));
+    cursor = parent;
+  }
+}
+
+/** A dist dir must sit strictly inside the repo. `cleanDist` deletes
+ *  recursively, so a config typo — or a symlink on the path — that resolved to
+ *  the repo root or above would take the working tree with it.
+ *
+ *  Returns the symlink-resolved path, which is the one that was actually
+ *  checked; deleting anything else would defeat the point of checking. */
 export function assertSafeDistDir(distDir: string, repoRoot: string): string {
-  const root = resolve(repoRoot);
-  const dir = resolve(root, distDir);
+  const rawRoot = resolve(repoRoot);
+  const root = existsSync(rawRoot) ? realpathSync(rawRoot) : rawRoot;
+  const dir = resolveParentThroughSymlinks(resolve(rawRoot, distDir));
   if (dir === root || !dir.startsWith(`${root}${sep}`)) {
     throw new Error(
       `check-bundle-size: distDir ${JSON.stringify(distDir)} resolves to ${dir}, which is not inside ${root}. Refusing to remove it.`,
@@ -107,26 +148,51 @@ export function cleanDist(distDir: string, repoRoot: string): void {
   rmSync(assertSafeDistDir(distDir, repoRoot), { recursive: true, force: true });
 }
 
-/** Matches a trailing content hash. Two shapes, both deliberately narrow:
- *  Rollup/Vite's default base64url digest, which is EXACTLY 8 chars and may
- *  contain `-`/`_` at either end (`index--GMgTQRt.js`, `index-CEyAyFk-.js`);
- *  and a long lowercase-hex digest as webpack and friends emit.
+/** A trailing `-<segment>` before the extension: the shape a content hash takes.
+ *  Matching the SHAPE is not enough to call it a hash — see `looksLikeHash`. */
+const TRAILING_SEGMENT = /-([A-Za-z0-9_-]{8}|[0-9a-f]{16,})(\.[^.]+)$/;
+
+/** Distinguish a content hash from an ordinary word, which is the whole
+ *  difficulty: both are drawn from the same alphabet and both are commonly 8
+ *  characters, so `react-markdown.js` and `ProjectArea-DWbILnNi.js` have the
+ *  same shape.
  *
- *  Width is what separates a hash from a word, because the alphabets overlap.
- *  Allowing "8 or more" would eat the tail of `use-callback-ref.js` and leave
- *  `use.js` — which would then collide with every other `use-*` chunk and make
- *  the guard refuse to seed a clean dist. A miss here is cheap (cleanDist
- *  already prevents the pollution); a false positive blocks a real re-baseline. */
-const CHUNK_HASH = /-(?:[A-Za-z0-9_-]{8}|[0-9a-f]{16,})(\.[^.]+)$/;
+ *  Every hash observed in real Rollup/Vite output carries at least two capitals
+ *  or a digit — `DWbILnNi`, `B2W0H_8K`, `llO5iolO`, `-GMgTQRt`. English words
+ *  used as chunk names carry neither: `markdown`, `provider`, `callback`,
+ *  `debounce`, `critical`, `messages`. A capitalised word (`Provider`) has one
+ *  capital, so it stays on the word side of the line.
+ *
+ *  The rule is deliberately biased toward MISSING hashes. A miss costs one
+ *  unreported duplicate pair, and a polluted dist produces many; `cleanDist`
+ *  is the real defence and this is only a backstop. A false positive collapses
+ *  two unrelated chunks into one logical name and makes the guard refuse to
+ *  seed a clean dist — with advice ("remove dist and re-run") that reproduces
+ *  the refusal identically, so the target can never be re-baselined at all. */
+function looksLikeHash(segment: string): boolean {
+  if (/^[0-9a-f]{16,}$/.test(segment)) return true; // long hex: unambiguous
+  if (/[0-9]/.test(segment)) return true;
+  return (segment.match(/[A-Z]/g) ?? []).length >= 2;
+}
 
 /** Strip a content hash so two builds of the same chunk share a name:
  *  `ProjectArea-DWbILnNi.js` and `ProjectArea-LeWXd_sH.js` both become
- *  `ProjectArea.js`, while `use-callback-ref.js` and `index.js` are untouched. */
+ *  `ProjectArea.js`, while `react-markdown.js` and `use-debounce.js` are
+ *  left exactly as they are. */
 export function logicalChunkName(name: string): string {
-  return name.replace(CHUNK_HASH, "$1");
+  const match = TRAILING_SEGMENT.exec(name);
+  if (!match?.[1] || !looksLikeHash(match[1])) return name;
+  return name.slice(0, match.index) + match[2];
 }
 
-export type DuplicateChunk = { bucket: string; logical: string; files: { name: string; raw: number }[] };
+export type DuplicateChunk = {
+  bucket: string;
+  /** Directory-qualified, so `dist/esm/index.js` and `dist/cjs/index.js` — the
+   *  normal shape of a dual-format library build — are not mistaken for one
+   *  chunk emitted twice. */
+  logical: string;
+  files: { name: string; raw: number }[];
+};
 
 /** Find chunks that appear more than once under different content hashes.
  *
@@ -138,8 +204,9 @@ export type DuplicateChunk = { bucket: string; logical: string; files: { name: s
 export function findDuplicateChunks(m: Measurement): DuplicateChunk[] {
   const groups = new Map<string, DuplicateChunk>();
   for (const f of m.files) {
-    const logical = logicalChunkName(f.name);
-    if (logical === f.name) continue; // unhashed name — nothing to collide on
+    const stripped = logicalChunkName(f.name);
+    if (stripped === f.name) continue; // unhashed name — nothing to collide on
+    const logical = f.dir ? posix.join(f.dir, stripped) : stripped;
     const key = `${f.bucket}\u0000${logical}`;
     const group = groups.get(key) ?? { bucket: f.bucket, logical, files: [] };
     group.files.push({ name: f.name, raw: f.raw });

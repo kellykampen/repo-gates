@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -392,5 +400,188 @@ describe("runBundleSize empty measurement", () => {
 
     expect(exit).toBe(1);
     expect(existsSync(join(root, "budgets.json"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gaps found by independent verification of the first commit.
+// ---------------------------------------------------------------------------
+
+describe("logicalChunkName does not mistake words for hashes", () => {
+  // Every one of these was WRONGLY collapsed by the first implementation,
+  // which tested only the shape of the trailing segment and not its content.
+  it.each([
+    "react-markdown.js",
+    "react-dropdown.js",
+    "auth-provider.js",
+    "theme-provider.js",
+    "use-debounce.js",
+    "use-callback.js",
+    "i18n-messages.js",
+    "styles-critical.css",
+  ])("leaves %s alone", (name) => {
+    expect(logicalChunkName(name)).toBe(name);
+  });
+
+  it("keeps a capitalised word on the word side of the line", () => {
+    // One capital is a word; two or more is a hash. `Provider` must not read
+    // as a digest just because it is capitalised.
+    expect(logicalChunkName("theme-Provider.js")).toBe("theme-Provider.js");
+  });
+
+  it("still strips genuine digests, including the awkward real ones", () => {
+    // No digit, no lowercase, leading and trailing dashes, underscores —
+    // all observed in real Rollup output.
+    expect(logicalChunkName("index--GMgTQRt.js")).toBe("index.js");
+    expect(logicalChunkName("index-CEyAyFk-.js")).toBe("index.js");
+    expect(logicalChunkName("icons-B2W0H_8K.js")).toBe("icons.js");
+    expect(logicalChunkName("prosemirror-llO5iolO.js")).toBe("prosemirror.js");
+  });
+
+  it("accepts a digit-bearing digest that carries no capitals at all", () => {
+    // `a1b2c3d4` has zero uppercase letters, so the capital-count rule alone
+    // would reject it. Only the digit arm admits it — and no English word used
+    // as a chunk name contains digits.
+    expect(logicalChunkName("main-a1b2c3d4.js")).toBe("main.js");
+    expect(logicalChunkName("vendor-0f8e7d6c.js")).toBe("vendor.js");
+  });
+});
+
+describe("findDuplicateChunks is directory-aware", () => {
+  it("does not pair the same filename across a dual-format build", () => {
+    // dist/esm/x.js + dist/cjs/x.js is the normal shape of a library build,
+    // not one chunk emitted twice. `measure` records only basenames, so
+    // without directory qualification these collide.
+    const dir = mkdtempSync(join(tmpdir(), "rg-dual-"));
+    writeBuild(join(dir, "esm"), { "ProjectArea-DWbILnNi.js": 400 });
+    writeBuild(join(dir, "cjs"), { "ProjectArea-LeWXd_sH.js": 400 });
+
+    expect(findDuplicateChunks(measure(dir, BUCKETS))).toEqual([]);
+  });
+
+  it("still pairs two builds layered in the SAME directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-same-"));
+    writeBuild(join(dir, "esm"), {
+      "ProjectArea-DWbILnNi.js": 400,
+      "ProjectArea-LeWXd_sH.js": 400,
+    });
+
+    const dupes = findDuplicateChunks(measure(dir, BUCKETS));
+    expect(dupes.map((d) => d.logical)).toEqual(["esm/ProjectArea.js"]);
+  });
+
+  it("does not pair an unhashed entry with a hashed chunk of the same stem", () => {
+    // A build that emits an unhashed entry alongside hashed chunks is ordinary.
+    // `index.js` strips to itself, so without the early-continue it would join
+    // `index-CEyAyFk-.js`'s group and be reported as the same chunk twice.
+    const dir = mkdtempSync(join(tmpdir(), "rg-unhashed-"));
+    writeBuild(dir, { "index.js": 100, "index-CEyAyFk-.js": 1000 });
+
+    expect(findDuplicateChunks(measure(dir, BUCKETS))).toEqual([]);
+  });
+});
+
+describe("--init refuses at the boundary, not just in bulk", () => {
+  it("refuses a dist holding exactly ONE duplicated chunk", () => {
+    // The minimal realistic pollution. A fixture with several duplicate groups
+    // cannot tell `> 0` from `> 1`.
+    const { ctx, root, dist } = makeBundleCtx();
+    const exit = runBundleSize(ctx, true, {
+      clean: () => {},
+      build: () => {
+        writeBuild(dist, { "index-CEyAyFk-.js": 1000, "ProjectArea-DWbILnNi.js": 400 });
+        writeBuild(dist, { "index-CiJes0HC.js": 1000 });
+        return 0;
+      },
+    });
+
+    expect(exit).toBe(1);
+    expect(existsSync(join(root, "budgets.json"))).toBe(false);
+  });
+});
+
+describe("assertSafeDistDir containment", () => {
+  it("refuses a sibling directory whose path merely prefixes the repo root", () => {
+    // `<base>/repo` vs `<base>/repoEVIL`: a containment test of
+    // `startsWith(root)` without the separator accepts the second.
+    //
+    // Both directories must genuinely exist. With non-existent paths the root
+    // is left unresolved while the target is resolved through its deepest
+    // existing ancestor, and on macOS that alone (/tmp -> /private/tmp) makes
+    // the two disagree — so the assertion would pass without exercising the
+    // separator at all.
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "rg-sibling-")));
+    const root = join(base, "repo");
+    mkdirSync(join(root, "dist"), { recursive: true });
+    mkdirSync(join(base, "repoEVIL", "dist"), { recursive: true });
+
+    expect(assertSafeDistDir("dist", root)).toBe(join(root, "dist")); // control
+    expect(() => assertSafeDistDir("../repoEVIL/dist", root)).toThrow(/Refusing to remove/);
+  });
+
+  it("refuses a path that leaves the repo THROUGH a symlink", () => {
+    // resolve() is purely lexical, so the string looks contained while rmSync
+    // would follow the link straight out of the tree.
+    const root = mkdtempSync(join(tmpdir(), "rg-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "rg-outside-"));
+    mkdirSync(join(outside, "dist"), { recursive: true });
+    writeFileSync(join(outside, "dist", "VICTIM.txt"), "do not delete me");
+    symlinkSync(outside, join(root, "linkdir"));
+
+    expect(() => assertSafeDistDir("linkdir/dist", root)).toThrow(/Refusing to remove/);
+    expect(() => cleanDist("linkdir/dist", root)).toThrow(/Refusing to remove/);
+    expect(existsSync(join(outside, "dist", "VICTIM.txt"))).toBe(true);
+  });
+
+  it("still accepts an ordinary path whose parents do not exist yet", () => {
+    // The dist dir is normally absent on a first run; walking up to the
+    // deepest existing ancestor must not turn that into a refusal.
+    const root = mkdtempSync(join(tmpdir(), "rg-fresh-"));
+    expect(assertSafeDistDir("apps/web/dist", root)).toBe(join(realpathSync(root), "apps/web/dist"));
+  });
+
+  it("unlinks a symlinked dist dir without touching its target", () => {
+    // The FINAL component is deliberately left unresolved: rmSync removes the
+    // link, and whatever it pointed at survives.
+    const root = mkdtempSync(join(tmpdir(), "rg-linkdist-"));
+    const target = mkdtempSync(join(tmpdir(), "rg-target-"));
+    writeFileSync(join(target, "keep.txt"), "keep");
+    symlinkSync(target, join(root, "dist"));
+
+    cleanDist("dist", root);
+    expect(existsSync(join(root, "dist"))).toBe(false);
+    expect(existsSync(join(target, "keep.txt"))).toBe(true);
+  });
+});
+
+describe("--init refusal output", () => {
+  it("lists the first five duplicates and says how many it withheld", () => {
+    const { ctx, dist } = makeBundleCtx();
+    const first: Record<string, number> = {};
+    const second: Record<string, number> = {};
+    for (let i = 0; i < 7; i += 1) {
+      first[`Chunk${i}-DWbILnNi.js`] = 100;
+      second[`Chunk${i}-LeWXd_sH.js`] = 100;
+    }
+
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.join(" "));
+    });
+    runBundleSize(ctx, true, {
+      clean: () => {},
+      build: () => {
+        writeBuild(dist, first);
+        writeBuild(dist, second);
+        return 0;
+      },
+    });
+    spy.mockRestore();
+
+    const message = errors.join("\n");
+    expect(message).toContain("7 chunk(s) emitted more than once");
+    // Five listed, two withheld — the count must describe what was actually cut.
+    expect(message.match(/^ {2}Chunk\d\.js:/gm)).toHaveLength(5);
+    expect(message).toContain("… and 2 more");
   });
 });
