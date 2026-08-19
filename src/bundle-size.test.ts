@@ -187,8 +187,8 @@ describe("logicalChunkName", () => {
     expect(logicalChunkName("use-callback-ref.js")).toBe("use-callback-ref.js");
     expect(logicalChunkName("use-sync-store.js")).toBe("use-sync-store.js");
     expect(logicalChunkName("index.js")).toBe("index.js");
-    expect(logicalChunkName("chunk-abc.js")).toBe("chunk-abc.js"); // segment < 8
-    expect(logicalChunkName("polyfills-legacy.js")).toBe("polyfills-legacy.js"); // segment > 8
+    expect(logicalChunkName("chunk-abc.js")).toBe("chunk-abc.js"); // segment is 3
+    expect(logicalChunkName("polyfills-legacy.js")).toBe("polyfills-legacy.js"); // "legacy" is 6
   });
 });
 
@@ -445,6 +445,20 @@ describe("logicalChunkName does not mistake words for hashes", () => {
     expect(logicalChunkName("index-CEyAyFk-.js")).toBe("index.js");
     expect(logicalChunkName("icons-B2W0H_8K.js")).toBe("icons.js");
     expect(logicalChunkName("prosemirror-llO5iolO.js")).toBe("prosemirror.js");
+  });
+
+  it.each([
+    ["index-AbCdefg.js", 7],
+    ["index-AbCdefghi.js", 9],
+  ])("leaves %s alone — %i characters is not the hash width", (name) => {
+    // Both carry two capitals, so `looksLikeHash` would admit the segment
+    // happily; only the WIDTH rule keeps these intact. That makes each one a
+    // pin on a single side of `{8}`, which is otherwise untested in both
+    // directions — widening to {7,8} or {8,9} left the whole suite green.
+    //
+    // The two cases above look like they cover this and do not: "abc" is 3,
+    // nowhere near the edge, and "legacy" is 6, so both sit on the same side.
+    expect(logicalChunkName(name)).toBe(name);
   });
 
   it("accepts a digest at the two-capital boundary", () => {
