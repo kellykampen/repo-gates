@@ -24,11 +24,11 @@
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, posix, resolve, sep } from "node:path";
@@ -75,7 +75,22 @@ export function measure(distDir: string, buckets: BucketDef): Measurement {
   const walk = (dir: string, relative: string): void => {
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry);
-      const st = statSync(full);
+      // lstat, not stat: stat resolves symlinks, so a linked directory inside
+      // dist drags foreign bytes into the total and a self-referential link
+      // (dist/loop -> dist) fails the whole gate with ELOOP. Either way the
+      // number stops describing what the build emitted, which is the same
+      // failure this guard exists to prevent — just arriving through the
+      // filesystem instead of through the cache.
+      //
+      // Note the asymmetry with assertSafeDistDir one function up: THAT must
+      // resolve symlinks, to catch a distDir escaping the repo. This must not
+      // follow them, to keep bytes from outside out of the measurement.
+      //
+      // No explicit isSymbolicLink() branch is needed: under lstat a link is
+      // neither a file nor a directory, so the isFile() check below already
+      // drops it. An extra guard would be unreachable, and an unreachable
+      // guard is one nothing can test.
+      const st = lstatSync(full);
       if (st.isDirectory()) {
         walk(full, relative ? posix.join(relative, entry) : entry);
         continue;

@@ -468,6 +468,22 @@ describe("logicalChunkName does not mistake words for hashes", () => {
     expect(logicalChunkName("index-AbCdefgh.js")).toBe("index.js");
   });
 
+  it("accepts a digest whose only digit is a zero", () => {
+    // Narrowing the digit test to [1-9] would drop these silently.
+    expect(logicalChunkName("index-abc0defg.js")).toBe("index.js");
+    expect(logicalChunkName("app-0000abcd.js")).toBe("app.js");
+  });
+
+  it.each(["index-CEyAyFk-.js.map", "index-CEyAyFk-.min.js"])(
+    "leaves %s alone — the hash must sit against the final extension",
+    (name) => {
+      // The trailing-segment match is anchored and cannot span a dot. Dropping
+      // the anchor turns the first into `index.js`, and widening `[^.]+` to
+      // `.+` strips both — producing names that look plausible and are wrong.
+      expect(logicalChunkName(name)).toBe(name);
+    },
+  );
+
   it("accepts a long hex digest that the other arms would reject", () => {
     // All a-f, no digit, no capitals: only the long-hex arm admits it.
     expect(logicalChunkName("framework-abcdefabcdefabcd.js")).toBe("framework.js");
@@ -532,6 +548,42 @@ describe("--init refuses at the boundary, not just in bulk", () => {
 
     expect(exit).toBe(1);
     expect(existsSync(join(root, "budgets.json"))).toBe(false);
+  });
+});
+
+describe("measure does not follow symlinks", () => {
+  it("counts nothing from a linked directory pointing outside dist", () => {
+    // statSync resolves symlinks; lstatSync does not. With the former, these
+    // 9999 foreign bytes land in the total and the budget describes a
+    // directory rather than a build.
+    const dir = mkdtempSync(join(tmpdir(), "rg-linkmeasure-"));
+    const outside = mkdtempSync(join(tmpdir(), "rg-foreign-"));
+    writeFileSync(join(outside, "FOREIGN.js"), "x".repeat(9999));
+    writeBuild(dir, { "real-CEyAyFk-.js": 100 });
+    symlinkSync(outside, join(dir, "linked"));
+
+    const m = measure(dir, BUCKETS);
+    expect(m.buckets.js?.raw).toBe(100);
+    expect(m.files.map((f) => f.name)).toEqual(["real-CEyAyFk-.js"]);
+  });
+
+  it("survives a self-referential link instead of failing with ELOOP", () => {
+    // dist/loop -> dist. Following it recurses until the OS refuses, and the
+    // gate dies with an errno rather than a measurement.
+    const dir = mkdtempSync(join(tmpdir(), "rg-loop-"));
+    writeBuild(dir, { "real-CEyAyFk-.js": 100 });
+    symlinkSync(dir, join(dir, "loop"));
+
+    expect(() => measure(dir, BUCKETS)).not.toThrow();
+    expect(measure(dir, BUCKETS).buckets.js?.raw).toBe(100);
+  });
+
+  it("skips a symlinked FILE rather than counting it twice", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-linkfile-"));
+    writeBuild(dir, { "real-CEyAyFk-.js": 100 });
+    symlinkSync(join(dir, "real-CEyAyFk-.js"), join(dir, "alias-DWbILnNi.js"));
+
+    expect(measure(dir, BUCKETS).buckets.js?.raw).toBe(100);
   });
 });
 
@@ -617,6 +669,36 @@ describe("assertSafeDistDir containment", () => {
 });
 
 describe("--init refusal output", () => {
+  it("omits the withheld-count line when exactly five duplicates are listed", () => {
+    // The seven-group fixture below cannot tell `> 5` from `> 4`: both are
+    // true. At exactly five they differ — `> 4` would print "… and 0 more".
+    const { ctx, dist } = makeBundleCtx();
+    const first: Record<string, number> = {};
+    const second: Record<string, number> = {};
+    for (let i = 0; i < 5; i += 1) {
+      first[`Chunk${i}-DWbILnNi.js`] = 100;
+      second[`Chunk${i}-LeWXd_sH.js`] = 100;
+    }
+
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.join(" "));
+    });
+    runBundleSize(ctx, true, {
+      clean: () => {},
+      build: () => {
+        writeBuild(dist, first);
+        writeBuild(dist, second);
+        return 0;
+      },
+    });
+
+    const message = errors.join("\n");
+    expect(message).toContain("5 chunk(s) emitted more than once");
+    expect(message.match(/^ {2}Chunk\d\.js:/gm)).toHaveLength(5);
+    expect(message).not.toMatch(/… and \d+ more/);
+  });
+
   it("lists the first five duplicates and says how many it withheld", () => {
     const { ctx, dist } = makeBundleCtx();
     const first: Record<string, number> = {};
