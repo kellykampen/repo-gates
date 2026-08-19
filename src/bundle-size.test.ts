@@ -643,6 +643,19 @@ describe("assertSafeDistDir containment", () => {
     expect(() => assertSafeDistDir("../repoEVIL/dist", root)).toThrow(/Refusing to remove/);
   });
 
+  it("admits a child when the repo root IS a filesystem root", () => {
+    // `${root}${sep}` builds "//" when root is "/", so every child fails
+    // containment and the gate refuses to run at all.
+    expect(assertSafeDistDir("dist", "/")).toBe("/dist");
+    expect(assertSafeDistDir("apps/web/dist", "/")).toBe("/apps/web/dist");
+  });
+
+  it("still refuses the filesystem root itself, and anything above a child", () => {
+    // The normalisation must not turn "/" into a permissive prefix.
+    expect(() => assertSafeDistDir(".", "/")).toThrow(/Refusing to remove/);
+    expect(() => assertSafeDistDir("..", "/")).toThrow(/Refusing to remove/);
+  });
+
   it("refuses a path that leaves the repo THROUGH a symlink", () => {
     // resolve() is purely lexical, so the string looks contained while rmSync
     // would follow the link straight out of the tree.
