@@ -296,7 +296,17 @@ export function runCoverage(
   const budgets = loadBudgets(readFileSync(budgetsPath, "utf8"), ctx.config.coverage.budgetsPath);
   const { failures, newPkgs, stale, notRun } = checkPerPackage(perPkg, budgets, {
     partial: opts.partial,
-    packageExists: (pkg) => existsSync(resolve(ctx.repoRoot, pkg)),
+    // Probe for the package MANIFEST, not the directory. Raised in review on PR #12, which
+    // pointed out that `existsSync(dir)` also returns true for a regular file. That is real,
+    // and the likelier failure is worse: `git rm -r packages/x` leaves the directory behind
+    // whenever it holds gitignored contents, and every workspace package has a node_modules.
+    // So a directory probe would hold a deleted package's floor forever, which is precisely
+    // the dead-floor accumulation --partial is designed not to cause.
+    //
+    // A package.json is what makes a directory a package, so its absence answers the question
+    // being asked rather than a proxy for it. It also covers the file case for free: a regular
+    // file at `packages/x` has no `packages/x/package.json`.
+    packageExists: (pkg) => existsSync(resolve(ctx.repoRoot, pkg, "package.json")),
   });
 
   if (stale.length > 0) {

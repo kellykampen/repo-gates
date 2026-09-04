@@ -11,6 +11,7 @@ import {
   loadBudgets,
   pkgKey,
   readSummaryCounts,
+  runCoverage,
   seedBudgets,
   seedFloor,
   type Budgets,
@@ -159,6 +160,71 @@ describe("checkPerPackage", () => {
       expect(stale).toEqual(["packages/b"]);
       expect(notRun).toEqual([]);
     });
+  });
+});
+
+describe("runCoverage --partial: the REAL existence probe", () => {
+  // Every checkPerPackage test injects `packageExists`, so none of them exercises the probe
+  // runCoverage actually ships. That gap is not hypothetical: it is why the "existence default
+  // flipped to permissive" mutation initially survived. These drive the real filesystem.
+  function repoWith(pkgs: { dir: string; manifest: boolean; summary?: [number, number] }[]) {
+    const root = mkdtempSync(join(tmpdir(), "repo-gates-partial-"));
+    const budgets: Record<string, { functions: number; lines: number }> = {};
+    for (const { dir, manifest, summary } of pkgs) {
+      mkdirSync(join(root, dir), { recursive: true });
+      if (manifest) writeFileSync(join(root, dir, "package.json"), '{"name":"x"}');
+      if (summary) writeSummary(root, dir, summary[0], summary[1]);
+      budgets[dir] = { functions: 10, lines: 10 };
+    }
+    writeFileSync(
+      join(root, "coverage-budgets.json"),
+      JSON.stringify({ default: { functions: 10, lines: 10 }, packages: budgets }),
+    );
+    return root;
+  }
+
+  it("passes when an unrun package still has its manifest", () => {
+    const root = repoWith([
+      { dir: "packages/a", manifest: true, summary: [100, 100] },
+      { dir: "packages/b", manifest: true },
+    ]);
+    expect(runCoverage(ctxFor(root), { skipRun: true, partial: true })).toBe(0);
+  });
+
+  it("FAILS when the package is gone but its directory survives (gitignored leftovers)", () => {
+    // The realistic deletion: `git rm -r packages/b` leaves the directory behind whenever it
+    // holds gitignored contents, and every workspace package has a node_modules. A directory
+    // probe would call this "not run" and hold a dead floor forever. Probing the manifest is
+    // what makes the deletion visible.
+    const root = repoWith([{ dir: "packages/a", manifest: true, summary: [100, 100] }]);
+    mkdirSync(join(root, "packages/b", "node_modules"), { recursive: true });
+    writeFileSync(
+      join(root, "coverage-budgets.json"),
+      JSON.stringify({
+        default: { functions: 10, lines: 10 },
+        packages: { "packages/a": { functions: 10, lines: 10 }, "packages/b": { functions: 10, lines: 10 } },
+      }),
+    );
+    expect(runCoverage(ctxFor(root), { skipRun: true, partial: true })).toBe(1);
+  });
+
+  it("FAILS when a regular file replaced the package directory", () => {
+    // The case raised in review on PR #12: existsSync() is true for a file too.
+    const root = repoWith([{ dir: "packages/a", manifest: true, summary: [100, 100] }]);
+    writeFileSync(join(root, "packages", "b"), "not a package");
+    writeFileSync(
+      join(root, "coverage-budgets.json"),
+      JSON.stringify({
+        default: { functions: 10, lines: 10 },
+        packages: { "packages/a": { functions: 10, lines: 10 }, "packages/b": { functions: 10, lines: 10 } },
+      }),
+    );
+    expect(runCoverage(ctxFor(root), { skipRun: true, partial: true })).toBe(1);
+  });
+
+  it("refuses --init together with --partial", () => {
+    const root = repoWith([{ dir: "packages/a", manifest: true, summary: [100, 100] }]);
+    expect(runCoverage(ctxFor(root), { skipRun: true, partial: true, init: true })).toBe(1);
   });
 });
 
