@@ -98,6 +98,68 @@ describe("checkPerPackage", () => {
     const { stale } = checkPerPackage(perPkg, budgets);
     expect(stale).toEqual(["packages/b"]);
   });
+
+  describe("partial runs", () => {
+    // A partial run happens when CI scopes coverage to the packages a pull request affected.
+    // Every unaffected package then has no summary, which the full-run path calls stale.
+    const perPkg: PkgCoverage[] = [{ pkg: "packages/a", totals: { functions: 99, lines: 99 } }];
+
+    it("treats an unrun package as held, not stale, when its directory still exists", () => {
+      const { stale, notRun } = checkPerPackage(perPkg, budgets, {
+        partial: true,
+        packageExists: () => true,
+      });
+      expect(stale).toEqual([]);
+      expect(notRun).toEqual(["packages/b"]);
+    });
+
+    it("STILL reports a deleted package as stale in partial mode", () => {
+      // The load-bearing case. If --partial simply disabled the stale check it would become a
+      // way to hide dead floors, and CI would pass that flag on every run. The flag has to
+      // narrow the check, not remove it: absence is excused only for a package still on disk.
+      const { stale, notRun } = checkPerPackage(perPkg, budgets, {
+        partial: true,
+        packageExists: (pkg) => pkg !== "packages/b",
+      });
+      expect(stale).toEqual(["packages/b"]);
+      expect(notRun).toEqual([]);
+    });
+
+    it("distinguishes the two in one run", () => {
+      const mixed = { ...budgets, packages: { ...budgets.packages, "packages/gone": budgets.default } };
+      const { stale, notRun } = checkPerPackage(perPkg, mixed, {
+        partial: true,
+        packageExists: (pkg) => pkg !== "packages/gone",
+      });
+      expect(stale).toEqual(["packages/gone"]);
+      expect(notRun).toEqual(["packages/b"]);
+    });
+
+    it("still fails an affected package that is BELOW its floor", () => {
+      // Scoping changes which packages are measured, never how strictly a measured one is judged.
+      const below: PkgCoverage[] = [{ pkg: "packages/b", totals: { functions: 1, lines: 1 } }];
+      const { failures } = checkPerPackage(below, budgets, {
+        partial: true,
+        packageExists: () => true,
+      });
+      expect(failures.map((f) => f.pkg)).toEqual(["packages/b", "packages/b"]);
+    });
+
+    it("fails closed when partial is requested with no existence probe", () => {
+      // Nothing else pins the default, and the unsafe direction is silent: an "it exists"
+      // default would mark every unmatched entry as merely not-run and disable stale detection
+      // for a caller who simply forgot the probe.
+      const { stale, notRun } = checkPerPackage(perPkg, budgets, { partial: true });
+      expect(stale).toEqual(["packages/b"]);
+      expect(notRun).toEqual([]);
+    });
+
+    it("defaults to full-run behaviour when partial is not requested", () => {
+      const { stale, notRun } = checkPerPackage(perPkg, budgets, { packageExists: () => true });
+      expect(stale).toEqual(["packages/b"]);
+      expect(notRun).toEqual([]);
+    });
+  });
 });
 
 describe("coverageScore", () => {
