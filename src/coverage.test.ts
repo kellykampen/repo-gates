@@ -11,6 +11,7 @@ import {
   loadBudgets,
   pkgKey,
   readSummaryCounts,
+  runCoverage,
   seedBudgets,
   seedFloor,
   type Budgets,
@@ -97,6 +98,133 @@ describe("checkPerPackage", () => {
     const perPkg: PkgCoverage[] = [{ pkg: "packages/a", totals: { functions: 99, lines: 99 } }];
     const { stale } = checkPerPackage(perPkg, budgets);
     expect(stale).toEqual(["packages/b"]);
+  });
+
+  describe("partial runs", () => {
+    // A partial run happens when CI scopes coverage to the packages a pull request affected.
+    // Every unaffected package then has no summary, which the full-run path calls stale.
+    const perPkg: PkgCoverage[] = [{ pkg: "packages/a", totals: { functions: 99, lines: 99 } }];
+
+    it("treats an unrun package as held, not stale, when its directory still exists", () => {
+      const { stale, notRun } = checkPerPackage(perPkg, budgets, {
+        partial: true,
+        packageExists: () => true,
+      });
+      expect(stale).toEqual([]);
+      expect(notRun).toEqual(["packages/b"]);
+    });
+
+    it("STILL reports a deleted package as stale in partial mode", () => {
+      // The load-bearing case. If --partial simply disabled the stale check it would become a
+      // way to hide dead floors, and CI would pass that flag on every run. The flag has to
+      // narrow the check, not remove it: absence is excused only for a package still on disk.
+      const { stale, notRun } = checkPerPackage(perPkg, budgets, {
+        partial: true,
+        packageExists: (pkg) => pkg !== "packages/b",
+      });
+      expect(stale).toEqual(["packages/b"]);
+      expect(notRun).toEqual([]);
+    });
+
+    it("distinguishes the two in one run", () => {
+      const mixed = { ...budgets, packages: { ...budgets.packages, "packages/gone": budgets.default } };
+      const { stale, notRun } = checkPerPackage(perPkg, mixed, {
+        partial: true,
+        packageExists: (pkg) => pkg !== "packages/gone",
+      });
+      expect(stale).toEqual(["packages/gone"]);
+      expect(notRun).toEqual(["packages/b"]);
+    });
+
+    it("still fails an affected package that is BELOW its floor", () => {
+      // Scoping changes which packages are measured, never how strictly a measured one is judged.
+      const below: PkgCoverage[] = [{ pkg: "packages/b", totals: { functions: 1, lines: 1 } }];
+      const { failures } = checkPerPackage(below, budgets, {
+        partial: true,
+        packageExists: () => true,
+      });
+      expect(failures.map((f) => f.pkg)).toEqual(["packages/b", "packages/b"]);
+    });
+
+    it("fails closed when partial is requested with no existence probe", () => {
+      // Nothing else pins the default, and the unsafe direction is silent: an "it exists"
+      // default would mark every unmatched entry as merely not-run and disable stale detection
+      // for a caller who simply forgot the probe.
+      const { stale, notRun } = checkPerPackage(perPkg, budgets, { partial: true });
+      expect(stale).toEqual(["packages/b"]);
+      expect(notRun).toEqual([]);
+    });
+
+    it("defaults to full-run behaviour when partial is not requested", () => {
+      const { stale, notRun } = checkPerPackage(perPkg, budgets, { packageExists: () => true });
+      expect(stale).toEqual(["packages/b"]);
+      expect(notRun).toEqual([]);
+    });
+  });
+});
+
+describe("runCoverage --partial: the REAL existence probe", () => {
+  // Every checkPerPackage test injects `packageExists`, so none of them exercises the probe
+  // runCoverage actually ships. That gap is not hypothetical: it is why the "existence default
+  // flipped to permissive" mutation initially survived. These drive the real filesystem.
+  function repoWith(pkgs: { dir: string; manifest: boolean; summary?: [number, number] }[]) {
+    const root = mkdtempSync(join(tmpdir(), "repo-gates-partial-"));
+    const budgets: Record<string, { functions: number; lines: number }> = {};
+    for (const { dir, manifest, summary } of pkgs) {
+      mkdirSync(join(root, dir), { recursive: true });
+      if (manifest) writeFileSync(join(root, dir, "package.json"), '{"name":"x"}');
+      if (summary) writeSummary(root, dir, summary[0], summary[1]);
+      budgets[dir] = { functions: 10, lines: 10 };
+    }
+    writeFileSync(
+      join(root, "coverage-budgets.json"),
+      JSON.stringify({ default: { functions: 10, lines: 10 }, packages: budgets }),
+    );
+    return root;
+  }
+
+  it("passes when an unrun package still has its manifest", () => {
+    const root = repoWith([
+      { dir: "packages/a", manifest: true, summary: [100, 100] },
+      { dir: "packages/b", manifest: true },
+    ]);
+    expect(runCoverage(ctxFor(root), { skipRun: true, partial: true })).toBe(0);
+  });
+
+  it("FAILS when the package is gone but its directory survives (gitignored leftovers)", () => {
+    // The realistic deletion: `git rm -r packages/b` leaves the directory behind whenever it
+    // holds gitignored contents, and every workspace package has a node_modules. A directory
+    // probe would call this "not run" and hold a dead floor forever. Probing the manifest is
+    // what makes the deletion visible.
+    const root = repoWith([{ dir: "packages/a", manifest: true, summary: [100, 100] }]);
+    mkdirSync(join(root, "packages/b", "node_modules"), { recursive: true });
+    writeFileSync(
+      join(root, "coverage-budgets.json"),
+      JSON.stringify({
+        default: { functions: 10, lines: 10 },
+        packages: { "packages/a": { functions: 10, lines: 10 }, "packages/b": { functions: 10, lines: 10 } },
+      }),
+    );
+    expect(runCoverage(ctxFor(root), { skipRun: true, partial: true })).toBe(1);
+  });
+
+  it("FAILS when a regular file replaced the package directory", () => {
+    // The case raised in review on PR #12: existsSync() is true for a file too.
+    const root = repoWith([{ dir: "packages/a", manifest: true, summary: [100, 100] }]);
+    writeFileSync(join(root, "packages", "b"), "not a package");
+    writeFileSync(
+      join(root, "coverage-budgets.json"),
+      JSON.stringify({
+        default: { functions: 10, lines: 10 },
+        packages: { "packages/a": { functions: 10, lines: 10 }, "packages/b": { functions: 10, lines: 10 } },
+      }),
+    );
+    expect(runCoverage(ctxFor(root), { skipRun: true, partial: true })).toBe(1);
+  });
+
+  it("refuses --init together with --partial", () => {
+    const root = repoWith([{ dir: "packages/a", manifest: true, summary: [100, 100] }]);
+    expect(runCoverage(ctxFor(root), { skipRun: true, partial: true, init: true })).toBe(1);
   });
 });
 
